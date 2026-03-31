@@ -33,6 +33,19 @@ def create_app():
 
     # ✅ IMPORTANT: import + register blueprint ici (les 2 lignes doivent être indentées)
     from .routes.oauth_linkedin import oauth_linkedin_bp
+    from .routes.oauth_twitter import oauth_twitter_bp
+    from .routes.oauth_medium import oauth_medium_bp
+    from .routes.dashboard import dashboard_bp
+    from .routes.quote_generator import quote_generator_bp
+    from .routes.hook_generator import hook_generator_bp
+    from .routes.ai_ideas import ai_ideas_bp
+
     app.register_blueprint(oauth_linkedin_bp)
+    app.register_blueprint(oauth_twitter_bp)
+    app.register_blueprint(oauth_medium_bp)
+    app.register_blueprint(dashboard_bp)
+    app.register_blueprint(quote_generator_bp)
+    app.register_blueprint(hook_generator_bp)
+    app.register_blueprint(ai_ideas_bp)
 
     return app

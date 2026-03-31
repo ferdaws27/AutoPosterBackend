@@ -7,7 +7,7 @@ from bson.objectid import ObjectId
 def get_user_by_email(email):
     """Retrieve user from MongoDB by email"""
     try:
-        collection = current_app.mongo["autoposter"]["users"]
+        collection = current_app.mongo["users"]
         user_doc = collection.find_one({"email": email})
         if user_doc:
             return User.from_dict(user_doc)
@@ -20,7 +20,7 @@ def get_user_by_email(email):
 def get_user_by_id(user_id):
     """Retrieve user from MongoDB by ID"""
     try:
-        collection = current_app.mongo["autoposter"]["users"]
+        collection = current_app.mongo["users"]
         user_doc = collection.find_one({"_id": ObjectId(user_id)})
         if user_doc:
             return User.from_dict(user_doc)

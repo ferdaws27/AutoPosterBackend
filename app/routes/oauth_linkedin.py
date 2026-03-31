@@ -160,7 +160,7 @@ def callback():
 
 @oauth_linkedin_bp.get("/me")
 @jwt_required()
-def get_current_user():
+def n():
     """
     Get the currently logged-in user's information.
     Requires valid JWT token in Authorization header.
@@ -190,6 +190,17 @@ def get_current_user():
             "role": user_doc.get("role"),
             "created_at": user_doc.get("created_at").isoformat() if user_doc.get("created_at") else None,
             "updated_at": user_doc.get("updated_at").isoformat() if user_doc.get("updated_at") else None,
+            # Other social accounts (connected in Settings → Integrations)
+            "twitter_id": user_doc.get("twitter_id"),
+            "twitter_username": user_doc.get("twitter_username"),
+            "twitter_name": user_doc.get("twitter_name"),
+            "twitter_profile_image_url": user_doc.get("twitter_profile_image_url"),
+            "twitter_connected": bool(user_doc.get("twitter_id")),
+            "medium_id": user_doc.get("medium_id"),
+            "medium_username": user_doc.get("medium_username"),
+            "medium_name": user_doc.get("medium_name"),
+            "medium_image_url": user_doc.get("medium_image_url"),
+            "medium_connected": bool(user_doc.get("medium_id")),
         }
         
         return jsonify(user_data), 200
