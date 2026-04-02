@@ -23,3 +23,5 @@ class Config:
     # URLs
     BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:5000")
     FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
+    OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+    OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini")
