@@ -1,7 +1,8 @@
-from flask import Flask, request
+from flask import Flask, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
 from pymongo import MongoClient
+from openai import OpenAI
 import os
 
 from .config import Config
@@ -64,6 +65,14 @@ def create_app():
         raise
 
     # Route test backend
+    # 🔹 OpenRouter client
+    openrouter_client = OpenAI(
+        base_url="https://openrouter.ai/api/v1",
+        api_key=os.getenv("OPENROUTER_API_KEY"),
+    )
+
+    model_name = os.getenv("OPENROUTER_MODEL", "openai/gpt-oss-20b:free")
+
     @app.get("/api/health")
     def health():
         return {"status": "ok", "message": "AutoPoster Backend Running"}
@@ -76,5 +85,46 @@ def create_app():
     app.register_blueprint(oauth_linkedin_bp)
     app.register_blueprint(hook_generator_bp, url_prefix="/api/hook-generator")
     app.register_blueprint(quote_generator_bp, url_prefix="/api/quote-generator")
+    # 🔹 ROUTE IA
+    @app.post("/api/ai/chat")
+    def ai_chat():
+        try:
+            data = request.get_json()
+
+            messages = data.get("messages", [])
+            enable_reasoning = data.get("enable_reasoning", True)
+
+            extra_body = {}
+            if enable_reasoning:
+                extra_body["reasoning"] = {"enabled": True}
+
+            response = openrouter_client.chat.completions.create(
+                model=model_name,
+                messages=messages,
+                extra_body=extra_body
+            )
+
+            message = response.choices[0].message
+
+            return jsonify({
+                "success": True,
+                "data": {
+                    "role": message.role,
+                    "content": message.content,
+                    "reasoning_details": getattr(message, "reasoning_details", None)
+                }
+            })
+
+        except Exception as e:
+            return jsonify({
+                "success": False,
+                "error": str(e)
+            }), 500
+
+    # ✅ IMPORTANT: import + register blueprint ici
+    from .routes.oauth_linkedin import oauth_linkedin_bp
+    from .routes.posts import posts_bp
+    app.register_blueprint(oauth_linkedin_bp)
+    app.register_blueprint(posts_bp)
 
     return app
