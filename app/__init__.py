@@ -122,9 +122,9 @@ def create_app():
             }), 500
 
     # ✅ IMPORTANT: import + register blueprint ici
-    from .routes.oauth_linkedin import oauth_linkedin_bp
+    
     from .routes.posts import posts_bp
-    app.register_blueprint(oauth_linkedin_bp)
+
     app.register_blueprint(posts_bp)
 
     return app
