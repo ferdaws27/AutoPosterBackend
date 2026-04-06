@@ -12,6 +12,9 @@ class Config:
     # JWT
     JWT_SECRET_KEY = os.getenv("JWT_SECRET")
 
+    # Session
+    SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-key-change-in-production")
+
     # MongoDB
     MONGO_URI = os.getenv("MONGO_URI")
     MONGO_DB = os.getenv("MONGO_DB")
@@ -19,6 +22,10 @@ class Config:
     # LinkedIn OAuth
     LINKEDIN_CLIENT_ID = os.getenv("LINKEDIN_CLIENT_ID")
     LINKEDIN_CLIENT_SECRET = os.getenv("LINKEDIN_CLIENT_SECRET")
+
+    # Twitter OAuth
+    TWITTER_CLIENT_ID = os.getenv("TWITTER_CLIENT_ID")
+    TWITTER_CLIENT_SECRET = os.getenv("TWITTER_CLIENT_SECRET")
 
     # URLs
     BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:5000")
