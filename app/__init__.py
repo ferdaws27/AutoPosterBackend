@@ -79,10 +79,12 @@ def create_app():
 
     # Blueprints
     from .routes.oauth_linkedin import oauth_linkedin_bp
+
     from .routes.hook_generator import hook_generator_bp
     from .routes.quote_generator import quote_generator_bp
 
     app.register_blueprint(oauth_linkedin_bp)
+
     app.register_blueprint(hook_generator_bp, url_prefix="/api/hook-generator")
     app.register_blueprint(quote_generator_bp, url_prefix="/api/quote-generator")
     # 🔹 ROUTE IA
