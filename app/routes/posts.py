@@ -1,5 +1,5 @@
 from flask import Blueprint, current_app, request, jsonify
-from flask_jwt_extended import jwt_required, get_jwt_identity
+from flask_jwt_extended import jwt_required, get_jwt_identity, verify_jwt_in_request
 from app.models.post import Post
 from bson.objectid import ObjectId
 from datetime import datetime
@@ -11,10 +11,28 @@ posts_bp = Blueprint("posts_bp", __name__, url_prefix="/api/posts")
 # ✅ GET POSTS
 # =========================
 @posts_bp.get("/getPosts")
-@jwt_required()
 def get_posts():
     try:
-        user_id = get_jwt_identity()
+        # Try to get JWT identity if available, but don't require it
+        user_id = None
+        try:
+            verify_jwt_in_request(optional=True)
+            user_id = get_jwt_identity()
+        except:
+            pass
+        
+        # Return empty posts if no user is authenticated
+        if not user_id:
+            return jsonify({
+                "success": True,
+                "data": {
+                    "posts": [],
+                    "total": 0,
+                    "limit": 50,
+                    "offset": 0
+                }
+            })
+        
         mongo = current_app.mongo
 
         status = request.args.get("status")
