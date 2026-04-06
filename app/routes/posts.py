@@ -1,5 +1,5 @@
 from flask import Blueprint, current_app, request, jsonify
-from flask_jwt_extended import jwt_required, get_jwt_identity, verify_jwt_in_request
+from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.models.post import Post
 from bson.objectid import ObjectId
 from datetime import datetime
@@ -11,28 +11,10 @@ posts_bp = Blueprint("posts_bp", __name__, url_prefix="/api/posts")
 # ✅ GET POSTS
 # =========================
 @posts_bp.get("/getPosts")
+@jwt_required()  # ✅ REQUIRE AUTHENTICATION for user isolation
 def get_posts():
     try:
-        # Try to get JWT identity if available, but don't require it
-        user_id = None
-        try:
-            verify_jwt_in_request(optional=True)
-            user_id = get_jwt_identity()
-        except:
-            pass
-        
-        # Return empty posts if no user is authenticated
-        if not user_id:
-            return jsonify({
-                "success": True,
-                "data": {
-                    "posts": [],
-                    "total": 0,
-                    "limit": 50,
-                    "offset": 0
-                }
-            })
-        
+        user_id = get_jwt_identity()
         mongo = current_app.mongo
 
         status = request.args.get("status")
@@ -40,7 +22,7 @@ def get_posts():
         limit = int(request.args.get("limit", 50))
         offset = int(request.args.get("offset", 0))
 
-        # Filter by user_id - each user only sees their own posts
+        # Filter by user_id - ONLY this user's posts
         query = {"user_id": user_id}
 
         if status:
@@ -326,22 +308,17 @@ def duplicate_post(post_id):
 # ✅ STATS
 # =========================
 @posts_bp.get("/stats/summary")
+@jwt_required()  # ✅ REQUIRE AUTHENTICATION
 def get_posts_stats():
-    """Get post statistics. Works with or without authentication."""
+    """Get post statistics for the authenticated user only."""
     try:
+        user_id = get_jwt_identity()
         mongo = current_app.mongo
         posts_collection = mongo[Post.collection_name]
 
-        # Build pipeline - if user is authenticated, filter by user_id
-        try:
-            user_id = get_jwt_identity()
-            match_stage = {"$match": {"user_id": user_id}}
-        except:
-            # No authentication - get all posts
-            match_stage = {"$match": {}}
-
+        # Filter by user_id - only get this user's stats
         pipeline = [
-            match_stage,
+            {"$match": {"user_id": user_id}},
             {"$group": {
                 "_id": "$status",
                 "count": {"$sum": 1}
