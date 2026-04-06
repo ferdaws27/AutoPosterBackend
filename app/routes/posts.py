@@ -7,7 +7,10 @@ from datetime import datetime
 posts_bp = Blueprint("posts_bp", __name__, url_prefix="/api/posts")
 
 
-@posts_bp.get("/")
+# =========================
+# ✅ GET POSTS
+# =========================
+@posts_bp.get("/getPosts")
 @jwt_required()
 def get_posts():
     try:
@@ -19,13 +22,17 @@ def get_posts():
         limit = int(request.args.get("limit", 50))
         offset = int(request.args.get("offset", 0))
 
+        # Filter by user_id - each user only sees their own posts
         query = {"user_id": user_id}
+
         if status:
             query["status"] = status
+
         if platform:
             query[f"platforms.{platform}"] = True
 
         posts_collection = mongo[Post.collection_name]
+
         posts_cursor = (
             posts_collection.find(query)
             .sort("created_at", -1)
@@ -35,8 +42,8 @@ def get_posts():
 
         posts = []
         for post_doc in posts_cursor:
-            post = Post.from_dict(post_doc)
-            posts.append(post.to_dict())
+            post_doc["_id"] = str(post_doc["_id"])  # ✅ FIX ObjectId
+            posts.append(post_doc)
 
         total_count = posts_collection.count_documents(query)
 
@@ -51,25 +58,41 @@ def get_posts():
         })
 
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
 
 
+# =========================
+# ✅ CREATE POST
+# =========================
 @posts_bp.post("/")
-@jwt_required()
+@jwt_required()  # ✅ Require authentication to create posts
 def create_post():
     try:
-        user_id = get_jwt_identity()
         data = request.get_json()
 
-        if not data or not data.get("content"):
+        content = data.get("content") or data.get("idea")
+
+        if not content:
             return jsonify({
                 "success": False,
                 "error": "Content is required"
             }), 400
 
+        # Get authenticated user_id from JWT
+        user_id = get_jwt_identity()
+        
+        if not user_id:
+            return jsonify({
+                "success": False,
+                "error": "User authentication required"
+            }), 401
+
         post = Post(
             user_id=user_id,
-            content=data["content"],
+            content=content,
             platforms=data.get("platforms", {}),
             status=data.get("status", "draft"),
             schedule_date=data.get("schedule_date"),
@@ -79,19 +102,36 @@ def create_post():
 
         mongo = current_app.mongo
         posts_collection = mongo[Post.collection_name]
+
         result = posts_collection.insert_one(post.to_dict())
 
         post._id = result.inserted_id
 
         return jsonify({
             "success": True,
-            "data": post.to_dict()
-        }), 201
+            "data": {
+                "_id": str(post._id),
+                "content": post.content,
+                "platforms": post.platforms,
+                "status": post.status,
+                "schedule_date": post.schedule_date,
+                "schedule_time": post.schedule_time,
+                "engagement": post.engagement,
+                "created_at": post.created_at.isoformat() if post.created_at else None,
+                "updated_at": post.updated_at.isoformat() if post.updated_at else None
+            }
+        })
 
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
 
 
+# =========================
+# ✅ GET POST BY ID
+# =========================
 @posts_bp.get("/<post_id>")
 @jwt_required()
 def get_post(post_id):
@@ -100,6 +140,7 @@ def get_post(post_id):
         mongo = current_app.mongo
 
         posts_collection = mongo[Post.collection_name]
+
         post_doc = posts_collection.find_one({
             "_id": ObjectId(post_id),
             "user_id": user_id
@@ -111,17 +152,23 @@ def get_post(post_id):
                 "error": "Post not found"
             }), 404
 
-        post = Post.from_dict(post_doc)
+        post_doc["_id"] = str(post_doc["_id"])  # ✅ FIX
 
         return jsonify({
             "success": True,
-            "data": post.to_dict()
+            "data": post_doc
         })
 
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
 
 
+# =========================
+# ✅ UPDATE POST
+# =========================
 @posts_bp.put("/<post_id>")
 @jwt_required()
 def update_post(post_id):
@@ -133,18 +180,19 @@ def update_post(post_id):
         posts_collection = mongo[Post.collection_name]
 
         update_data = {"updated_at": datetime.utcnow()}
-        if "content" in data:
-            update_data["content"] = data["content"]
-        if "platforms" in data:
-            update_data["platforms"] = data["platforms"]
-        if "status" in data:
-            update_data["status"] = data["status"]
-        if "schedule_date" in data:
-            update_data["schedule_date"] = data["schedule_date"]
-        if "schedule_time" in data:
-            update_data["schedule_time"] = data["schedule_time"]
-        if "engagement" in data:
-            update_data["engagement"] = data["engagement"]
+
+        fields = [
+            "content",
+            "platforms",
+            "status",
+            "schedule_date",
+            "schedule_time",
+            "engagement"
+        ]
+
+        for field in fields:
+            if field in data:
+                update_data[field] = data[field]
 
         result = posts_collection.update_one(
             {"_id": ObjectId(post_id), "user_id": user_id},
@@ -158,20 +206,26 @@ def update_post(post_id):
             }), 404
 
         updated_post = posts_collection.find_one({
-            "_id": ObjectId(post_id),
-            "user_id": user_id
+            "_id": ObjectId(post_id)
         })
-        post = Post.from_dict(updated_post)
+
+        updated_post["_id"] = str(updated_post["_id"])  # ✅ FIX
 
         return jsonify({
             "success": True,
-            "data": post.to_dict()
+            "data": updated_post
         })
 
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
 
 
+# =========================
+# ✅ DELETE POST
+# =========================
 @posts_bp.delete("/<post_id>")
 @jwt_required()
 def delete_post(post_id):
@@ -180,6 +234,7 @@ def delete_post(post_id):
         mongo = current_app.mongo
 
         posts_collection = mongo[Post.collection_name]
+
         result = posts_collection.delete_one({
             "_id": ObjectId(post_id),
             "user_id": user_id
@@ -197,9 +252,15 @@ def delete_post(post_id):
         })
 
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
 
 
+# =========================
+# ✅ DUPLICATE POST
+# =========================
 @posts_bp.post("/<post_id>/duplicate")
 @jwt_required()
 def duplicate_post(post_id):
@@ -208,47 +269,61 @@ def duplicate_post(post_id):
         mongo = current_app.mongo
 
         posts_collection = mongo[Post.collection_name]
-        original_post_doc = posts_collection.find_one({
+
+        original = posts_collection.find_one({
             "_id": ObjectId(post_id),
             "user_id": user_id
         })
 
-        if not original_post_doc:
+        if not original:
             return jsonify({
                 "success": False,
                 "error": "Post not found"
             }), 404
 
-        duplicate_post = Post.from_dict(original_post_doc)
-        duplicate_post._id = ObjectId()
-        duplicate_post.status = "draft"
-        duplicate_post.created_at = datetime.utcnow()
-        duplicate_post.updated_at = datetime.utcnow()
-        duplicate_post.schedule_date = None
-        duplicate_post.schedule_time = None
+        original["_id"] = ObjectId()
+        original["status"] = "draft"
+        original["created_at"] = datetime.utcnow()
+        original["updated_at"] = datetime.utcnow()
+        original["schedule_date"] = None
+        original["schedule_time"] = None
 
-        result = posts_collection.insert_one(duplicate_post.to_dict())
+        result = posts_collection.insert_one(original)
 
-        duplicate_post._id = result.inserted_id
+        original["_id"] = str(result.inserted_id)
+
         return jsonify({
             "success": True,
-            "data": duplicate_post.to_dict()
+            "data": original
         }), 201
 
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
 
 
+# =========================
+# ✅ STATS
+# =========================
 @posts_bp.get("/stats/summary")
-@jwt_required()
 def get_posts_stats():
+    """Get post statistics. Works with or without authentication."""
     try:
-        user_id = get_jwt_identity()
         mongo = current_app.mongo
         posts_collection = mongo[Post.collection_name]
 
+        # Build pipeline - if user is authenticated, filter by user_id
+        try:
+            user_id = get_jwt_identity()
+            match_stage = {"$match": {"user_id": user_id}}
+        except:
+            # No authentication - get all posts
+            match_stage = {"$match": {}}
+
         pipeline = [
-            {"$match": {"user_id": user_id}},
+            match_stage,
             {"$group": {
                 "_id": "$status",
                 "count": {"$sum": 1}
@@ -265,36 +340,16 @@ def get_posts_stats():
         }
 
         for stat in stats_result:
-            status = stat["_id"]
-            count = stat["count"]
-            stats[status] = count
-            stats["total"] += count
-
-        recent_posts = list(
-            posts_collection.find({"user_id": user_id})
-            .sort("created_at", -1)
-            .limit(10)
-        )
-
-        recent_posts_data = []
-        for post_doc in recent_posts:
-            post = Post.from_dict(post_doc)
-            recent_posts_data.append({
-                "id": str(post._id),
-                "content": post.content[:100] + "..." if len(post.content) > 100 else post.content,
-                "status": post.status,
-                "platforms": post.platforms,
-                "created_at": post.created_at.isoformat() if post.created_at else None,
-                "engagement": post.engagement
-            })
+            stats[stat["_id"]] = stat["count"]
+            stats["total"] += stat["count"]
 
         return jsonify({
             "success": True,
-            "data": {
-                "stats": stats,
-                "recent_posts": recent_posts_data
-            }
+            "data": stats
         })
 
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500

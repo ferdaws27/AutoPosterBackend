@@ -38,8 +38,12 @@ def create_app():
     def log_request():
         print(f"Incoming request: {request.method} {request.url}")
         print(f"Headers: {dict(request.headers)}")
-        if request.is_json:
-            print(f"Body: {request.get_json()}")
+        # Only try to parse JSON for requests with a body
+        if request.method in ['POST', 'PUT', 'PATCH'] and request.is_json:
+            try:
+                print(f"Body: {request.get_json()}")
+            except:
+                pass
 
     # Initialisation SQLAlchemy + JWT
     db.init_app(app)
@@ -63,6 +67,29 @@ def create_app():
     except Exception as e:
         print(f"MongoDB connection error: {e}")
         raise
+    
+    # Initialize guest user if not exists
+    try:
+        from werkzeug.security import generate_password_hash
+        from .models.user import User
+        users_collection = app.mongo["users"]
+        
+        guest_user = users_collection.find_one({"email": "guest@autoposter.tn"})
+        if not guest_user:
+            print("Creating guest user...")
+            guest = User(
+                email="guest@autoposter.tn",
+                password="guest",  # Plain password for testing
+                first_name="Guest",
+                last_name="User",
+                role="FREE"
+            )
+            result = users_collection.insert_one(guest.to_dict())
+            print(f"✅ Guest user created with ID: {result.inserted_id}")
+        else:
+            print(f"✅ Guest user already exists: {guest_user.get('_id')}")
+    except Exception as e:
+        print(f"⚠️  Could not initialize guest user: {e}")
 
     # Route test backend
     # 🔹 OpenRouter client
@@ -78,11 +105,15 @@ def create_app():
         return {"status": "ok", "message": "AutoPoster Backend Running"}
 
     # Blueprints
+    
     from .routes.oauth_linkedin import oauth_linkedin_bp
+    from .routes.oauth import oauth_twitter_bp
     from .routes.hook_generator import hook_generator_bp
     from .routes.quote_generator import quote_generator_bp
 
+    
     app.register_blueprint(oauth_linkedin_bp)
+    app.register_blueprint(oauth_twitter_bp)
     app.register_blueprint(hook_generator_bp, url_prefix="/api/hook-generator")
     app.register_blueprint(quote_generator_bp, url_prefix="/api/quote-generator")
     # 🔹 ROUTE IA
@@ -123,8 +154,10 @@ def create_app():
 
     # ✅ IMPORTANT: import + register blueprint ici
     
+    from .routes.auth import auth_bp
     from .routes.posts import posts_bp
 
+    app.register_blueprint(auth_bp)
     app.register_blueprint(posts_bp)
 
     return app
