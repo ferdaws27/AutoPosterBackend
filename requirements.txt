@@ -1,0 +1,12 @@
+flask
+flask-jwt-extended
+flask-cors
+python-dotenv
+pymongo
+nltk
+spacy
+textblob
+PyPDF2
+pydub
+SpeechRecognition
+gunicorn
