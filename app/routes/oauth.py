@@ -2,7 +2,7 @@ from flask import Blueprint, current_app, redirect, request, jsonify, session
 import requests
 from flask_jwt_extended import create_access_token
 from urllib.parse import urlencode, quote
-from datetime import datetime
+from datetime import datetime, timedelta
 import base64
 import secrets
 import hashlib
@@ -170,7 +170,7 @@ def callback():
         return redirect(f"{frontend_url}/login?oauth_error=db_error")
 
    
-    jwt_token = create_access_token(identity=twitter_id)
+    jwt_token = create_access_token(identity=twitter_id, expires_delta=timedelta(days=7))
     token_encoded = quote(jwt_token)
 
     return redirect(f"{frontend_url}/oauth/callback#token={token_encoded}")

@@ -1,6 +1,7 @@
 from flask import Blueprint, current_app, request, jsonify
 from flask_jwt_extended import create_access_token
 from werkzeug.security import generate_password_hash, check_password_hash
+from datetime import timedelta
 from app.models.user import User
 from bson.objectid import ObjectId
 
@@ -53,9 +54,9 @@ def login():
                 "error": "Invalid email or password"
             }), 401
         
-        # Generate JWT token
+        # Generate JWT token with 7 days expiration
         user_id = str(user_doc["_id"])
-        access_token = create_access_token(identity=user_id)
+        access_token = create_access_token(identity=user_id, expires_delta=timedelta(days=7))
         
         # Return user info and token
         return jsonify({
@@ -123,8 +124,8 @@ def register():
         result = users_collection.insert_one(user.to_dict())
         user._id = result.inserted_id
         
-        # Generate JWT token
-        access_token = create_access_token(identity=str(user._id))
+        # Generate JWT token with 7 days expiration
+        access_token = create_access_token(identity=str(user._id), expires_delta=timedelta(days=7))
         
         return jsonify({
             "success": True,

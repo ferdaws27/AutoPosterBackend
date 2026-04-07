@@ -9,8 +9,9 @@ class Config:
     SQLALCHEMY_DATABASE_URI = os.getenv("DATABASE_URL")
     SQLALCHEMY_TRACK_MODIFICATIONS = False
 
-    # JWT
+    # JWT - Long expiration for user session (7 days)
     JWT_SECRET_KEY = os.getenv("JWT_SECRET")
+    JWT_ACCESS_TOKEN_EXPIRES = 7 * 24 * 60 * 60  # ✅ 7 days in seconds
 
     # Session
     SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-key-change-in-production")

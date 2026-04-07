@@ -3,7 +3,7 @@ import requests
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
 from urllib.parse import urlencode, quote
 from app.models.user import User
-from datetime import datetime
+from datetime import datetime, timedelta
 
 oauth_linkedin_bp = Blueprint(
     "oauth_linkedin_bp",
@@ -149,7 +149,7 @@ def callback():
         return redirect(f"{frontend_url}/login?oauth_error=db_error")
 
     # 6) créer JWT puis rediriger vers React (✅ HASH)
-    jwt_token = create_access_token(identity=email)
+    jwt_token = create_access_token(identity=email, expires_delta=timedelta(days=7))
     token_encoded = quote(jwt_token)
 
     redirect_to = f"{frontend_url}/oauth/callback#token={token_encoded}"
