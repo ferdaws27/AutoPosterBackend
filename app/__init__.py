@@ -110,12 +110,14 @@ def create_app():
     from .routes.oauth import oauth_twitter_bp
     from .routes.hook_generator import hook_generator_bp
     from .routes.quote_generator import quote_generator_bp
+    from .routes.trends import trends_bp
 
     
     app.register_blueprint(oauth_linkedin_bp)
     app.register_blueprint(oauth_twitter_bp)
     app.register_blueprint(hook_generator_bp, url_prefix="/api/hook-generator")
     app.register_blueprint(quote_generator_bp, url_prefix="/api/quote-generator")
+    app.register_blueprint(trends_bp)
     # 🔹 ROUTE IA
     @app.post("/api/ai/chat")
     def ai_chat():
@@ -157,9 +159,11 @@ def create_app():
     from .routes.auth import auth_bp
     from .routes.posts import posts_bp
     from .routes.voice import voice_bp
+    from .routes.news import news_bp
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(posts_bp)
     app.register_blueprint(voice_bp)
+    app.register_blueprint(news_bp)
 
     return app
