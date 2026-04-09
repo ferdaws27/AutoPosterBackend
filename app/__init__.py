@@ -79,7 +79,7 @@ def create_app():
             print("Creating guest user...")
             guest = User(
                 email="guest@autoposter.tn",
-                password="guest",  # Plain password for testing
+                password=generate_password_hash("guest"),  # Hash the password
                 first_name="Guest",
                 last_name="User",
                 role="FREE"
