@@ -79,7 +79,7 @@ def create_app():
             print("Creating guest user...")
             guest = User(
                 email="guest@autoposter.tn",
-                password="guest",
+                password=generate_password_hash("guest"),  # Hash the password
                 first_name="Guest",
                 last_name="User",
                 role="FREE"
@@ -109,6 +109,9 @@ def create_app():
     from .routes.test_route import test_bp  # <-- note bien le dossier routes et le s  # <-- Import ici AVANT register
     from .routes.analytics import analytics_bp
     # 🔹 Register Blueprints
+    from .routes.trends import trends_bp
+
+    
     app.register_blueprint(oauth_linkedin_bp)
     app.register_blueprint(oauth_twitter_bp)
     app.register_blueprint(hook_generator_bp, url_prefix="/api/hook-generator")
@@ -122,5 +125,53 @@ def create_app():
     @app.get("/api/health")
     def health():
         return {"status": "ok", "message": "AutoPoster Backend Running"}
+    app.register_blueprint(trends_bp)
+    # 🔹 ROUTE IA
+    @app.post("/api/ai/chat")
+    def ai_chat():
+        try:
+            data = request.get_json()
+
+            messages = data.get("messages", [])
+            enable_reasoning = data.get("enable_reasoning", True)
+
+            extra_body = {}
+            if enable_reasoning:
+                extra_body["reasoning"] = {"enabled": True}
+
+            response = openrouter_client.chat.completions.create(
+                model=model_name,
+                messages=messages,
+                extra_body=extra_body
+            )
+
+            message = response.choices[0].message
+
+            return jsonify({
+                "success": True,
+                "data": {
+                    "role": message.role,
+                    "content": message.content,
+                    "reasoning_details": getattr(message, "reasoning_details", None)
+                }
+            })
+
+        except Exception as e:
+            return jsonify({
+                "success": False,
+                "error": str(e)
+            }), 500
+
+    # ✅ IMPORTANT: import + register blueprint ici
+    
+    from .routes.auth import auth_bp
+    from .routes.posts import posts_bp
+    from .routes.voice import voice_bp
+    from .routes.news import news_bp
+
+    app.register_blueprint(auth_bp)
+    app.register_blueprint(posts_bp)
+    app.register_blueprint(voice_bp)
+    app.register_blueprint(news_bp)
 
     return app  # <-- RETURN à la fin

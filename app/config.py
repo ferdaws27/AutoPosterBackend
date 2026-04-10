@@ -33,3 +33,9 @@ class Config:
     FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
     OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
     OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini")
+
+    # Twitter Trends API
+    TREND_API = os.getenv("TREND_API")
+
+    # SERPApi News API
+    NEWS_API = os.getenv("NEWS_API")

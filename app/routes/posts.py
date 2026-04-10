@@ -179,6 +179,19 @@ def update_post(post_id):
 
         posts_collection = mongo[Post.collection_name]
 
+        # Debug logs
+        print(f"DEBUG: Attempting to update post {post_id}")
+        print(f"DEBUG: User ID from JWT: {user_id}")
+        print(f"DEBUG: User ID type: {type(user_id)}")
+        
+        # Check if post exists with string ID (posts are stored as strings)
+        post_exists = posts_collection.find_one({"_id": post_id})
+        print(f"DEBUG: Post exists: {post_exists is not None}")
+        if post_exists:
+            print(f"DEBUG: Post user_id: {post_exists.get('user_id')}")
+            print(f"DEBUG: Post user_id type: {type(post_exists.get('user_id'))}")
+            print(f"DEBUG: User IDs match: {post_exists.get('user_id') == user_id}")
+
         update_data = {"updated_at": datetime.utcnow()}
 
         fields = [
@@ -187,17 +200,21 @@ def update_post(post_id):
             "status",
             "schedule_date",
             "schedule_time",
-            "engagement"
+            "engagement",
+            "selectedImages"
         ]
 
         for field in fields:
             if field in data:
                 update_data[field] = data[field]
 
+        # Use string ID instead of ObjectId (posts are stored as strings)
         result = posts_collection.update_one(
-            {"_id": ObjectId(post_id), "user_id": user_id},
+            {"_id": post_id, "user_id": user_id},
             {"$set": update_data}
         )
+
+        print(f"DEBUG: Update result - matched_count: {result.matched_count}")
 
         if result.matched_count == 0:
             return jsonify({
@@ -206,7 +223,7 @@ def update_post(post_id):
             }), 404
 
         updated_post = posts_collection.find_one({
-            "_id": ObjectId(post_id)
+            "_id": post_id
         })
 
         updated_post["_id"] = str(updated_post["_id"])  # ✅ FIX
@@ -230,28 +247,58 @@ def update_post(post_id):
 @jwt_required()
 def delete_post(post_id):
     try:
+        print(f"=== DELETE POST DEBUG ===")
+        print(f"Post ID: {post_id}")
+        
         user_id = get_jwt_identity()
+        print(f"User ID from JWT: {user_id}")
+        print(f"User ID type: {type(user_id)}")
+        
         mongo = current_app.mongo
-
         posts_collection = mongo[Post.collection_name]
 
-        result = posts_collection.delete_one({
-            "_id": ObjectId(post_id),
+        # First check if post exists and belongs to user
+        print(f"Searching for post with _id='{post_id}' and user_id='{user_id}'")
+        post = posts_collection.find_one({
+            "_id": post_id,
             "user_id": user_id
         })
-
-        if result.deleted_count == 0:
+        
+        print(f"Post found: {post is not None}")
+        if post:
+            print(f"Post details: _id='{post['_id']}', user_id='{post.get('user_id')}'")
+        
+        if not post:
+            print("Post not found - returning 404")
             return jsonify({
                 "success": False,
                 "error": "Post not found"
             }), 404
 
+        # Delete the post
+        print(f"Attempting to delete post...")
+        result = posts_collection.delete_one({
+            "_id": post_id,
+            "user_id": user_id
+        })
+
+        print(f"Delete result - deleted_count: {result.deleted_count}")
+
+        if result.deleted_count == 0:
+            print("No documents deleted - returning 404")
+            return jsonify({
+                "success": False,
+                "error": "Post not found"
+            }), 404
+
+        print("Post deleted successfully - returning 200")
         return jsonify({
             "success": True,
             "message": "Post deleted successfully"
         })
 
     except Exception as e:
+        print(f"Exception in delete_post: {str(e)}")
         return jsonify({
             "success": False,
             "error": str(e)
@@ -265,15 +312,25 @@ def delete_post(post_id):
 @jwt_required()
 def duplicate_post(post_id):
     try:
+        print(f"=== DUPLICATE POST DEBUG ===")
+        print(f"Post ID to duplicate: {post_id}")
+        
         user_id = get_jwt_identity()
+        print(f"User ID from JWT: {user_id}")
+        
         mongo = current_app.mongo
-
         posts_collection = mongo[Post.collection_name]
 
+        print(f"Searching for post with _id='{post_id}' and user_id='{user_id}'")
         original = posts_collection.find_one({
-            "_id": ObjectId(post_id),
+            "_id": post_id,
             "user_id": user_id
         })
+        
+        print(f"Original post found: {original is not None}")
+        if original:
+            print(f"Original post _id: {original.get('_id')}")
+            print(f"Original post keys: {list(original.keys())}")
 
         if not original:
             return jsonify({
@@ -281,6 +338,7 @@ def duplicate_post(post_id):
                 "error": "Post not found"
             }), 404
 
+        print("Creating duplicate post...")
         original["_id"] = ObjectId()
         original["status"] = "draft"
         original["created_at"] = datetime.utcnow()
@@ -288,16 +346,22 @@ def duplicate_post(post_id):
         original["schedule_date"] = None
         original["schedule_time"] = None
 
+        print("Inserting duplicate post into database...")
         result = posts_collection.insert_one(original)
+        print(f"Insert result: {result.inserted_id}")
 
         original["_id"] = str(result.inserted_id)
+        print(f"Final duplicate post _id: {original['_id']}")
 
-        return jsonify({
+        response_data = {
             "success": True,
             "data": original
-        }), 201
+        }
+        print(f"Returning response: {response_data}")
+        return jsonify(response_data), 201
 
     except Exception as e:
+        print(f"Exception in duplicate_post: {str(e)}")
         return jsonify({
             "success": False,
             "error": str(e)
