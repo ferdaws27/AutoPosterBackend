@@ -98,7 +98,7 @@ def create_app():
     )
     model_name = os.getenv("OPENROUTER_MODEL", "openai/gpt-oss-20b:free")
 
-    # Routes API de test et blueprints existants
+    # Routes API - Import all blueprints
     from .routes.oauth_linkedin import oauth_linkedin_bp
     from .routes.oauth import oauth_twitter_bp
     from .routes.hook_generator import hook_generator_bp
@@ -106,12 +106,12 @@ def create_app():
     from .routes.auth import auth_bp
     from .routes.posts import posts_bp
     from .routes.voice import voice_bp
-    from .routes.test_route import test_bp  # <-- note bien le dossier routes et le s  # <-- Import ici AVANT register
+    from .routes.test_route import test_bp
     from .routes.analytics import analytics_bp
-    # 🔹 Register Blueprints
     from .routes.trends import trends_bp
+    from .routes.news import news_bp
 
-    
+    # Register all blueprints in organized manner
     app.register_blueprint(oauth_linkedin_bp)
     app.register_blueprint(oauth_twitter_bp)
     app.register_blueprint(hook_generator_bp, url_prefix="/api/hook-generator")
@@ -119,13 +119,16 @@ def create_app():
     app.register_blueprint(auth_bp)
     app.register_blueprint(posts_bp)
     app.register_blueprint(voice_bp)
-    app.register_blueprint(test_bp)  # <-- Register ici
+    app.register_blueprint(test_bp)
     app.register_blueprint(analytics_bp, url_prefix="/api")
+    app.register_blueprint(trends_bp)
+    app.register_blueprint(news_bp)
+
     # Route health
     @app.get("/api/health")
     def health():
         return {"status": "ok", "message": "AutoPoster Backend Running"}
-    app.register_blueprint(trends_bp)
+
     # 🔹 ROUTE IA
     @app.post("/api/ai/chat")
     def ai_chat():
@@ -162,16 +165,4 @@ def create_app():
                 "error": str(e)
             }), 500
 
-    # ✅ IMPORTANT: import + register blueprint ici
-    
-    from .routes.auth import auth_bp
-    from .routes.posts import posts_bp
-    from .routes.voice import voice_bp
-    from .routes.news import news_bp
-
-    app.register_blueprint(auth_bp)
-    app.register_blueprint(posts_bp)
-    app.register_blueprint(voice_bp)
-    app.register_blueprint(news_bp)
-
-    return app  # <-- RETURN à la fin
+    return app

@@ -1,6 +1,7 @@
 from flask import Blueprint, current_app, jsonify
 from collections import defaultdict
 from flask_jwt_extended import jwt_required, get_jwt_identity
+from bson import ObjectId
 
 analytics_bp = Blueprint("analytics", __name__)
 
@@ -10,11 +11,22 @@ def get_analytics():
 
     # 🔥 récupérer user connecté
     current_user_id = get_jwt_identity()
+    
+    # 🔥 Get user email to handle posts stored with email as user_id
+    try:
+        current_user = current_app.mongo.users.find_one({"_id": ObjectId(current_user_id)})
+    except:
+        current_user = current_app.mongo.users.find_one({"_id": current_user_id})
+    
+    user_email = current_user.get("email") if current_user else None
 
-    # 🔥 récupérer SEULEMENT ses posts
-    posts = list(current_app.mongo.posts.find({
-        "user_id": current_user_id
-    }))
+    # 🔥 récupérer SEULEMENT ses posts (check both user_id and email)
+    query = {"$or": [{"user_id": ObjectId(current_user_id)}, {"user_id": current_user_id}]}
+    if user_email:
+        # Also search for posts where user_id is the email address
+        query = {"$or": [{"user_id": ObjectId(current_user_id)}, {"user_id": current_user_id}, {"user_id": user_email}]}
+
+    posts = list(current_app.mongo.posts.find(query))
 
     # 🔥 récupérer interactions de SES posts seulement
     post_ids = [str(post["_id"]) for post in posts]
@@ -49,7 +61,8 @@ def get_analytics():
             enriched_posts.append({
                 "_id": pid,
                 "content": post.get("content", ""),
-                "createdAt": post.get("schedule_date"),  # ✅ schedule_date utilisé par test_route.py
+                "createdAt": post.get("created_at", post.get("schedule_date")),  # ✅ Use created_at first, fallback to schedule_date
+                "scheduleDate": post.get("schedule_date"),
                 "platforms": post.get("platforms", {}),
                 "engagement": stats,
                 "totalEngagement": total
