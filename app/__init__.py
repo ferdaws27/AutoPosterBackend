@@ -1,3 +1,4 @@
+# app/__init__.py
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
@@ -38,7 +39,6 @@ def create_app():
     def log_request():
         print(f"Incoming request: {request.method} {request.url}")
         print(f"Headers: {dict(request.headers)}")
-        # Only try to parse JSON for requests with a body
         if request.method in ['POST', 'PUT', 'PATCH'] and request.is_json:
             try:
                 print(f"Body: {request.get_json()}")
@@ -67,7 +67,7 @@ def create_app():
     except Exception as e:
         print(f"MongoDB connection error: {e}")
         raise
-    
+
     # Initialize guest user if not exists
     try:
         from werkzeug.security import generate_password_hash
@@ -79,7 +79,7 @@ def create_app():
             print("Creating guest user...")
             guest = User(
                 email="guest@autoposter.tn",
-                password="guest",  # Plain password for testing
+                password="guest",
                 first_name="Guest",
                 last_name="User",
                 role="FREE"
@@ -91,75 +91,36 @@ def create_app():
     except Exception as e:
         print(f"⚠️  Could not initialize guest user: {e}")
 
-    # Route test backend
-    # 🔹 OpenRouter client
+    # OpenRouter client
     openrouter_client = OpenAI(
         base_url="https://openrouter.ai/api/v1",
         api_key=os.getenv("OPENROUTER_API_KEY"),
     )
-
     model_name = os.getenv("OPENROUTER_MODEL", "openai/gpt-oss-20b:free")
 
-    @app.get("/api/health")
-    def health():
-        return {"status": "ok", "message": "AutoPoster Backend Running"}
-
-    # Blueprints
-    
+    # Routes API de test et blueprints existants
     from .routes.oauth_linkedin import oauth_linkedin_bp
     from .routes.oauth import oauth_twitter_bp
     from .routes.hook_generator import hook_generator_bp
     from .routes.quote_generator import quote_generator_bp
-
-    
+    from .routes.auth import auth_bp
+    from .routes.posts import posts_bp
+    from .routes.voice import voice_bp
+    from .routes.test_route import test_bp  # <-- note bien le dossier routes et le s  # <-- Import ici AVANT register
+    from .routes.analytics import analytics_bp
+    # 🔹 Register Blueprints
     app.register_blueprint(oauth_linkedin_bp)
     app.register_blueprint(oauth_twitter_bp)
     app.register_blueprint(hook_generator_bp, url_prefix="/api/hook-generator")
     app.register_blueprint(quote_generator_bp, url_prefix="/api/quote-generator")
-    # 🔹 ROUTE IA
-    @app.post("/api/ai/chat")
-    def ai_chat():
-        try:
-            data = request.get_json()
-
-            messages = data.get("messages", [])
-            enable_reasoning = data.get("enable_reasoning", True)
-
-            extra_body = {}
-            if enable_reasoning:
-                extra_body["reasoning"] = {"enabled": True}
-
-            response = openrouter_client.chat.completions.create(
-                model=model_name,
-                messages=messages,
-                extra_body=extra_body
-            )
-
-            message = response.choices[0].message
-
-            return jsonify({
-                "success": True,
-                "data": {
-                    "role": message.role,
-                    "content": message.content,
-                    "reasoning_details": getattr(message, "reasoning_details", None)
-                }
-            })
-
-        except Exception as e:
-            return jsonify({
-                "success": False,
-                "error": str(e)
-            }), 500
-
-    # ✅ IMPORTANT: import + register blueprint ici
-    
-    from .routes.auth import auth_bp
-    from .routes.posts import posts_bp
-    from .routes.voice import voice_bp
-
     app.register_blueprint(auth_bp)
     app.register_blueprint(posts_bp)
     app.register_blueprint(voice_bp)
+    app.register_blueprint(test_bp)  # <-- Register ici
+    app.register_blueprint(analytics_bp, url_prefix="/api")
+    # Route health
+    @app.get("/api/health")
+    def health():
+        return {"status": "ok", "message": "AutoPoster Backend Running"}
 
-    return app
+    return app  # <-- RETURN à la fin
