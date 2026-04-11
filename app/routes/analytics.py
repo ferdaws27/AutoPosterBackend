@@ -12,8 +12,10 @@ def get_analytics():
     # 🔥 récupérer user connecté
     current_user_id = get_jwt_identity()
     
-    # 🔥 Get user email to handle posts stored with email as user_id
+    # Get user email to handle posts stored with email as user_id
     try:
+        # Only try ObjectId conversion if current_user_id is a valid ObjectId
+        ObjectId(current_user_id)
         current_user = current_app.mongo.users.find_one({"_id": ObjectId(current_user_id)})
     except:
         current_user = current_app.mongo.users.find_one({"_id": current_user_id})
@@ -21,10 +23,20 @@ def get_analytics():
     user_email = current_user.get("email") if current_user else None
 
     # 🔥 récupérer SEULEMENT ses posts (check both user_id and email)
-    query = {"$or": [{"user_id": ObjectId(current_user_id)}, {"user_id": current_user_id}]}
+    query_conditions = [{"user_id": current_user_id}]
+    
+    # Only add ObjectId condition if current_user_id is a valid ObjectId
+    try:
+        ObjectId(current_user_id)
+        query_conditions.append({"user_id": ObjectId(current_user_id)})
+    except:
+        pass
+    
     if user_email:
         # Also search for posts where user_id is the email address
-        query = {"$or": [{"user_id": ObjectId(current_user_id)}, {"user_id": current_user_id}, {"user_id": user_email}]}
+        query_conditions.append({"user_id": user_email})
+    
+    query = {"$or": query_conditions}
 
     posts = list(current_app.mongo.posts.find(query))
 
@@ -57,15 +69,15 @@ def get_analytics():
         stats = post_stats.get(pid, {"likes": 0, "comments": 0, "shares": 0})
         total = stats["likes"] + stats["comments"] + stats["shares"]
 
-        if total > 0:
-            enriched_posts.append({
-                "_id": pid,
-                "content": post.get("content", ""),
-                "createdAt": post.get("created_at", post.get("schedule_date")),  # ✅ Use created_at first, fallback to schedule_date
-                "scheduleDate": post.get("schedule_date"),
-                "platforms": post.get("platforms", {}),
-                "engagement": stats,
-                "totalEngagement": total
-            })
+        # Include all posts, not just those with engagement
+        enriched_posts.append({
+            "_id": pid,
+            "content": post.get("content", ""),
+            "createdAt": post.get("created_at", post.get("schedule_date")),  # Use created_at first, fallback to schedule_date
+            "scheduleDate": post.get("schedule_date"),
+            "platforms": post.get("platforms", {}),
+            "engagement": stats,
+            "totalEngagement": total
+        })
 
     return jsonify(enriched_posts)

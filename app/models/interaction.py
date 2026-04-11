@@ -11,17 +11,17 @@ class Interaction:
                  content=None, created_at=None, _id=None):
 
         self._id = _id or ObjectId()
-        self.post_id = ObjectId(post_id) if not isinstance(post_id, ObjectId) else post_id
+        self.post_id = post_id  # Posts use string IDs
         self.user_id = ObjectId(user_id) if not isinstance(user_id, ObjectId) else user_id
         self.type = interaction_type  # like / comment / share
         self.content = content  # فقط للـ comments
         self.created_at = created_at or datetime.utcnow()
 
-    # 🔹 تحويل لـ JSON (important لل frontend)
+    # تحويل لـ JSON (important لل frontend)
     def to_dict(self):
         return {
             "_id": str(self._id),
-            "post_id": str(self.post_id),
+            "post_id": self.post_id,  # Already a string
             "user_id": str(self.user_id),
             "type": self.type,
             "content": self.content,

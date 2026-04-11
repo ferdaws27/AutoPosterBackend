@@ -142,7 +142,7 @@ def get_post(post_id):
         posts_collection = mongo[Post.collection_name]
 
         post_doc = posts_collection.find_one({
-            "_id": ObjectId(post_id),
+            "_id": post_id,
             "user_id": user_id
         })
 

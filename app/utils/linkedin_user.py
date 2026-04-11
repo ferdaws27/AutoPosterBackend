@@ -21,7 +21,11 @@ def get_user_by_id(user_id):
     """Retrieve user from MongoDB by ID"""
     try:
         collection = current_app.mongo["autoposter"]["users"]
-        user_doc = collection.find_one({"_id": ObjectId(user_id)})
+        # Try ObjectId first, then fall back to string ID
+        try:
+            user_doc = collection.find_one({"_id": ObjectId(user_id)})
+        except:
+            user_doc = collection.find_one({"_id": user_id})
         if user_doc:
             return User.from_dict(user_doc)
         return None
