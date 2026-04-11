@@ -394,7 +394,7 @@ def get_posts_stats():
         stats = {
             "draft": 0,
             "scheduled": 0,
-            "published": 0,
+            "posted": 0,
             "total": 0
         }
 

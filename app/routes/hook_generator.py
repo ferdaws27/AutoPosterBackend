@@ -443,6 +443,7 @@ def favorite_hook():
         hook = payload.get("hook")
         topic = clean_text(payload.get("topic"), max_length=500)
         note = clean_text(payload.get("note", ""), max_length=300)
+        language = clean_text(payload.get("language", "auto"), max_length=20) or "auto"
 
         if not hook or not isinstance(hook, dict):
             return jsonify({"error": "Hook object is required"}), 400
