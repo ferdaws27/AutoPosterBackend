@@ -42,7 +42,20 @@ def create_app():
                 "allow_headers": ["Content-Type", "Authorization"],
                 "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
                 "supports_credentials": True,
-            }
+            },
+            r"/*": {
+                "origins": [
+                    os.getenv("FRONTEND_URL", "http://localhost:5173"),
+                    "http://127.0.0.1:5173",
+                    "http://localhost:5173",
+                    "http://localhost:5174",
+                    "http://localhost:5175",
+                    "http://localhost:5176",
+                ],
+                "allow_headers": ["Content-Type", "Authorization"],
+                "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+                "supports_credentials": True,
+            },
         },
     )
 

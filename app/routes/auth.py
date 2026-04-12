@@ -162,6 +162,12 @@ def me():
         try:
             user_doc = users_collection.find_one({"_id": ObjectId(identity)})
         except:
+            pass
+
+        if not user_doc:
+            user_doc = users_collection.find_one({"email": identity})
+
+        if not user_doc:
             user_doc = users_collection.find_one({"twitter_id": identity})
 
         if not user_doc:
