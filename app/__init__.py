@@ -30,15 +30,19 @@ def create_app():
     CORS(
         app,
         resources={
-            r"/api/*": cors_config,
-            r"/audience-analytics": cors_config,
-            r"/ai-persona-analysis": cors_config,
-            r"/ai-audience-insights": cors_config,
-            r"/ai-generate-strategy": cors_config,
-            r"/ai-content-preferences": cors_config,
-            r"/reset-and-generate": cors_config,
-            r"/generate-realistic-interactions": cors_config,
-            r"/posts-with-interactions": cors_config,
+            r"/api/*": {
+                "origins": [
+                    os.getenv("FRONTEND_URL", "http://localhost:5173"),
+                    "http://127.0.0.1:5173",
+                    "http://localhost:5173",
+                    "http://localhost:5174",
+                    "http://localhost:5175",
+                    "http://localhost:5176",
+                ],
+                "allow_headers": ["Content-Type", "Authorization"],
+                "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+                "supports_credentials": True,
+            }
         },
     )
 
@@ -119,6 +123,7 @@ def create_app():
     from .routes.analytics import analytics_bp
     from .routes.trends import trends_bp
     from .routes.news import news_bp
+    from .routes.oauth_medium import oauth_medium_bp
 
     # Register all blueprints in organized manner
     app.register_blueprint(oauth_linkedin_bp)
@@ -132,6 +137,7 @@ def create_app():
     app.register_blueprint(analytics_bp, url_prefix="/api")
     app.register_blueprint(trends_bp)
     app.register_blueprint(news_bp)
+    app.register_blueprint(oauth_medium_bp)
 
     # Route health
     @app.get("/api/health")

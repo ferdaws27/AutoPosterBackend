@@ -28,6 +28,10 @@ class Config:
     TWITTER_CLIENT_ID = os.getenv("TWITTER_CLIENT_ID")
     TWITTER_CLIENT_SECRET = os.getenv("TWITTER_CLIENT_SECRET")
 
+    # Medium OAuth
+    MEDIUM_CLIENT_ID = os.getenv("MEDIUM_CLIENT_ID")
+    MEDIUM_CLIENT_SECRET = os.getenv("MEDIUM_CLIENT_SECRET")
+
     # URLs
     BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:5000")
     FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
@@ -39,3 +43,6 @@ class Config:
 
     # SERPApi News API
     NEWS_API = os.getenv("NEWS_API")
+
+    # Medium RapidAPI
+    RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY", "c426905c0fmsh20c96dd32c32066p16845cjsn8d3fd7fad7e")
