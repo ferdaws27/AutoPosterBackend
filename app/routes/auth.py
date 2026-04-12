@@ -1,5 +1,5 @@
 from flask import Blueprint, current_app, request, jsonify
-from flask_jwt_extended import create_access_token
+from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import timedelta
 from app.models.user import User
@@ -145,3 +145,47 @@ def register():
             "success": False,
             "error": str(e)
         }), 500
+
+
+# =========================
+# ✅ GET CURRENT USER
+# =========================
+@auth_bp.get("/me")
+@jwt_required()
+def me():
+    try:
+        identity = get_jwt_identity()
+        mongo = current_app.mongo
+        users_collection = mongo["users"]
+
+        user_doc = None
+        try:
+            user_doc = users_collection.find_one({"_id": ObjectId(identity)})
+        except:
+            user_doc = users_collection.find_one({"twitter_id": identity})
+
+        if not user_doc:
+            return jsonify({"success": False, "error": "User not found"}), 404
+
+        return jsonify({
+            "success": True,
+            "user": {
+                "id": str(user_doc["_id"]),
+                "email": user_doc.get("email"),
+                "username": user_doc.get("username"),
+                "first_name": user_doc.get("first_name"),
+                "last_name": user_doc.get("last_name"),
+                "full_name": f"{user_doc.get('first_name') or ''} {user_doc.get('last_name') or ''}".strip() or user_doc.get("username") or user_doc.get("email"),
+                "name": user_doc.get("name"),
+                "profile_picture": user_doc.get("profile_picture"),
+                "bio": user_doc.get("bio"),
+                "followers": user_doc.get("followers"),
+                "following": user_doc.get("following"),
+                "role": user_doc.get("role", "FREE"),
+                "oauth_provider": user_doc.get("oauth_provider"),
+            }
+        }), 200
+
+    except Exception as e:
+        print(f"Me error: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 500
