@@ -9,6 +9,7 @@ class Post:
 
     def __init__(self, user_id, content, platforms=None, status="draft",
                  schedule_date=None, schedule_time=None, engagement=None,
+                 content_type=None, content_type_confidence=None,
                  created_at=None, updated_at=None, _id=None):
         self._id = _id or ObjectId()
         self.user_id = user_id
@@ -18,6 +19,8 @@ class Post:
         self.schedule_date = schedule_date
         self.schedule_time = schedule_time
         self.engagement = engagement or {}
+        self.content_type = content_type
+        self.content_type_confidence = content_type_confidence
         self.created_at = created_at or datetime.utcnow()
         self.updated_at = updated_at or datetime.utcnow()
 
@@ -32,6 +35,8 @@ class Post:
             "schedule_date": self.schedule_date,
             "schedule_time": self.schedule_time,
             "engagement": self.engagement,
+            "content_type": self.content_type,
+            "content_type_confidence": self.content_type_confidence,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None
         }
@@ -48,6 +53,8 @@ class Post:
             schedule_date=data.get("schedule_date"),
             schedule_time=data.get("schedule_time"),
             engagement=data.get("engagement", {}),
+            content_type=data.get("content_type"),
+            content_type_confidence=data.get("content_type_confidence"),
             created_at=data.get("created_at"),
             updated_at=data.get("updated_at"),
         )

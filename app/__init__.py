@@ -17,19 +17,28 @@ def create_app():
     app.config.from_object(Config)
 
     # CORS pour le frontend React
+    cors_config = {
+        "origins": [
+            os.getenv("FRONTEND_URL", "http://localhost:5173"),
+            "http://127.0.0.1:5173",
+            "http://localhost:5173",
+        ],
+        "allow_headers": ["Content-Type", "Authorization"],
+        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        "supports_credentials": True,
+    }
     CORS(
         app,
         resources={
-            r"/api/*": {
-                "origins": [
-                    os.getenv("FRONTEND_URL", "http://localhost:5173"),
-                    "http://127.0.0.1:5173",
-                    "http://localhost:5173",
-                ],
-                "allow_headers": ["Content-Type", "Authorization"],
-                "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-                "supports_credentials": True,
-            }
+            r"/api/*": cors_config,
+            r"/audience-analytics": cors_config,
+            r"/ai-persona-analysis": cors_config,
+            r"/ai-audience-insights": cors_config,
+            r"/ai-generate-strategy": cors_config,
+            r"/ai-content-preferences": cors_config,
+            r"/reset-and-generate": cors_config,
+            r"/generate-realistic-interactions": cors_config,
+            r"/posts-with-interactions": cors_config,
         },
     )
 

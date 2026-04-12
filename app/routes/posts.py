@@ -3,8 +3,94 @@ from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.models.post import Post
 from bson.objectid import ObjectId
 from datetime import datetime
+import requests as http_requests
+import json
+import re
+import threading
 
 posts_bp = Blueprint("posts_bp", __name__, url_prefix="/api/posts")
+
+CONTENT_TYPES = [
+    "tutorial", "story", "insight", "case_study", "motivational",
+    "short_tip", "news", "opinion", "deep_dive", "analysis"
+]
+
+
+def _detect_single_content_type(app, post_id, content):
+    """Detect content_type for a single post via OpenRouter (runs in background thread)."""
+    with app.app_context():
+        try:
+            prompt = f"""Classify this social media post into exactly ONE content type.
+
+Allowed types: {json.dumps(CONTENT_TYPES)}
+
+Post content:
+\"\"\"
+{content[:500]}
+\"\"\"
+
+Rules:
+- "tutorial": step-by-step how-to or educational walkthrough
+- "story": personal narrative, anecdote, or storytelling
+- "insight": key observation, lesson learned, or reflection
+- "case_study": real-world example with results/data
+- "motivational": inspirational, encouraging, or mindset-focused
+- "short_tip": quick actionable advice (1-3 sentences)
+- "news": industry news, updates, announcements
+- "opinion": personal stance, hot take, or debate
+- "deep_dive": in-depth exploration of a topic
+- "analysis": data-driven breakdown or comparison
+
+Respond in strict JSON:
+{{"content_type": "one_of_allowed_types", "confidence": 0.0-1.0}}
+
+Only return valid JSON, no markdown."""
+
+            response = http_requests.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {app.config['OPENROUTER_API_KEY']}",
+                    "Content-Type": "application/json",
+                    "HTTP-Referer": app.config.get("FRONTEND_URL", "http://localhost:5173"),
+                    "X-Title": "AutoPoster Content Classifier"
+                },
+                json={
+                    "model": app.config["OPENROUTER_MODEL"],
+                    "messages": [
+                        {"role": "system", "content": "You are a content classification expert. Return strict JSON only."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    "temperature": 0.3
+                },
+                timeout=30
+            )
+
+            result = response.json()
+            raw = result["choices"][0]["message"]["content"].strip()
+            if raw.startswith("```"):
+                raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
+            if raw.endswith("```"):
+                raw = raw[:-3]
+            raw = raw.strip()
+
+            parsed = json.loads(raw)
+            content_type = parsed.get("content_type", "").strip().lower()
+            confidence = parsed.get("confidence", 0)
+
+            if content_type not in CONTENT_TYPES:
+                content_type = "insight"
+
+            app.mongo.posts.update_one(
+                {"_id": post_id},
+                {"$set": {
+                    "content_type": content_type,
+                    "content_type_confidence": round(float(confidence), 2)
+                }}
+            )
+            print(f"[CONTENT-TYPE] Post {post_id} -> {content_type} ({confidence})")
+
+        except Exception as e:
+            print(f"[CONTENT-TYPE] Error for post {post_id}: {e}")
 
 
 # =========================
@@ -107,6 +193,15 @@ def create_post():
 
         post._id = result.inserted_id
 
+        # Auto-detect content_type in background
+        app = current_app._get_current_object()
+        thread = threading.Thread(
+            target=_detect_single_content_type,
+            args=(app, str(post._id), content)
+        )
+        thread.daemon = True
+        thread.start()
+
         return jsonify({
             "success": True,
             "data": {
@@ -201,7 +296,8 @@ def update_post(post_id):
             "schedule_date",
             "schedule_time",
             "engagement",
-            "selectedImages"
+            "selectedImages",
+            "content_type"
         ]
 
         for field in fields:
