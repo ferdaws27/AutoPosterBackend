@@ -2,6 +2,7 @@ from flask import Blueprint, current_app, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from datetime import datetime, timedelta
 from collections import defaultdict
+from bson import ObjectId
 import random
 import requests as http_requests
 import json
@@ -63,39 +64,162 @@ def parse_schedule_date(schedule_date):
     return None
 
 
+# Hour weights for realistic engagement distribution
+HOUR_WEIGHTS = {
+    0: 1, 1: 1, 2: 1, 3: 1, 4: 1, 5: 2,
+    6: 4, 7: 7, 8: 12, 9: 15, 10: 13, 11: 10,
+    12: 14, 13: 12, 14: 16, 15: 13, 16: 10, 17: 11,
+    18: 9, 19: 7, 20: 6, 21: 5, 22: 3, 23: 2
+}
+
+# Platform weights per content type — which platforms each content type performs best on
+PLATFORM_WEIGHTS_BY_TYPE = {
+    "tutorial":      {"LinkedIn": 50, "Twitter": 20, "Medium": 30},
+    "story":         {"LinkedIn": 25, "Twitter": 50, "Medium": 25},
+    "insight":       {"LinkedIn": 45, "Twitter": 35, "Medium": 20},
+    "deep_dive":     {"LinkedIn": 30, "Twitter": 10, "Medium": 60},
+    "motivational":  {"LinkedIn": 40, "Twitter": 45, "Medium": 15},
+    "news":          {"LinkedIn": 20, "Twitter": 60, "Medium": 20},
+    "short_tip":     {"LinkedIn": 30, "Twitter": 55, "Medium": 15},
+    "opinion":       {"LinkedIn": 35, "Twitter": 50, "Medium": 15},
+    "analysis":      {"LinkedIn": 40, "Twitter": 15, "Medium": 45},
+    "case_study":    {"LinkedIn": 55, "Twitter": 15, "Medium": 30},
+    "unclassified":  {"LinkedIn": 34, "Twitter": 33, "Medium": 33},
+}
+
+# Persona weights per content type — who engages with what
+# Widened gaps so each persona has a clear dominant content type
+PERSONA_WEIGHTS_BY_TYPE = {
+    "tutorial":      {"Entrepreneurs": 10, "AI Students": 65, "Writers": 5,  "Investors": 20},
+    "story":         {"Entrepreneurs": 10, "AI Students": 5,  "Writers": 70, "Investors": 15},
+    "insight":       {"Entrepreneurs": 55, "AI Students": 15, "Writers": 10, "Investors": 20},
+    "deep_dive":     {"Entrepreneurs": 10, "AI Students": 60, "Writers": 10, "Investors": 20},
+    "motivational":  {"Entrepreneurs": 60, "AI Students": 10, "Writers": 20, "Investors": 10},
+    "news":          {"Entrepreneurs": 15, "AI Students": 10, "Writers": 10, "Investors": 65},
+    "short_tip":     {"Entrepreneurs": 50, "AI Students": 25, "Writers": 15, "Investors": 10},
+    "opinion":       {"Entrepreneurs": 15, "AI Students": 5,  "Writers": 65, "Investors": 15},
+    "analysis":      {"Entrepreneurs": 10, "AI Students": 15, "Writers": 5,  "Investors": 70},
+    "case_study":    {"Entrepreneurs": 15, "AI Students": 10, "Writers": 5,  "Investors": 70},
+    "unclassified":  {"Entrepreneurs": 30, "AI Students": 30, "Writers": 20, "Investors": 20},
+}
+
+# Location weights per platform — geographic audience per platform
+LOCATION_WEIGHTS_BY_PLATFORM = {
+    "LinkedIn": {"USA": 35, "UK": 20, "Canada": 15, "Germany": 12, "France": 10, "Tunisia": 8},
+    "Twitter":  {"USA": 40, "UK": 15, "Canada": 10, "Germany": 8, "France": 12, "Tunisia": 15},
+    "Medium":   {"USA": 30, "UK": 18, "Canada": 12, "Germany": 15, "France": 15, "Tunisia": 10},
+}
+
+# Industry weights per persona — what industries each persona is in
+INDUSTRY_WEIGHTS_BY_PERSONA = {
+    "Entrepreneurs": {"Tech": 40, "Marketing": 30, "Finance": 20, "Education": 10},
+    "AI Students":   {"Tech": 55, "Marketing": 10, "Finance": 10, "Education": 25},
+    "Writers":       {"Tech": 15, "Marketing": 35, "Finance": 10, "Education": 40},
+    "Investors":     {"Tech": 30, "Marketing": 15, "Finance": 45, "Education": 10},
+}
+
+# Engagement rate multiplier per content type (how many of the 300 sample actually interact)
+ENGAGEMENT_RATE_BY_TYPE = {
+    "tutorial":      0.75,
+    "story":         0.85,
+    "insight":       0.60,
+    "deep_dive":     0.45,
+    "motivational":  0.90,
+    "news":          0.35,
+    "short_tip":     0.70,
+    "opinion":       0.55,
+    "analysis":      0.40,
+    "case_study":    0.50,
+    "unclassified":  0.55,
+}
+
+# Interaction type distribution per content type
+INTERACTION_TYPE_BY_CONTENT = {
+    "tutorial":      {"like": 0.50, "comment": 0.30, "share": 0.20},
+    "story":         {"like": 0.55, "comment": 0.35, "share": 0.10},
+    "insight":       {"like": 0.60, "comment": 0.25, "share": 0.15},
+    "deep_dive":     {"like": 0.40, "comment": 0.35, "share": 0.25},
+    "motivational":  {"like": 0.70, "comment": 0.20, "share": 0.10},
+    "news":          {"like": 0.45, "comment": 0.15, "share": 0.40},
+    "short_tip":     {"like": 0.65, "comment": 0.15, "share": 0.20},
+    "opinion":       {"like": 0.40, "comment": 0.45, "share": 0.15},
+    "analysis":      {"like": 0.50, "comment": 0.20, "share": 0.30},
+    "case_study":    {"like": 0.45, "comment": 0.25, "share": 0.30},
+    "unclassified":  {"like": 0.60, "comment": 0.20, "share": 0.20},
+}
+
+
+def _pick_weighted(options_dict):
+    """Pick from a dict {option: weight}."""
+    items = list(options_dict.keys())
+    weights = list(options_dict.values())
+    return random.choices(items, weights=weights, k=1)[0]
+
+
+def _pick_weighted_hour():
+    """Pick an hour of day weighted by typical social media engagement patterns."""
+    return _pick_weighted(HOUR_WEIGHTS)
+
+
 # -------------------------------
 # GENERATE INTERACTIONS POUR 1 POST
 # -------------------------------
-def _generate_for_post(post_id_str, schedule_date, now):
+def _generate_for_post(post_id_str, schedule_date, now, content_type="unclassified"):
     delta_seconds = int((now - schedule_date).total_seconds())
+    delta_days = max(delta_seconds // 86400, 1)
     followers_count = random.randint(1000, 6000)
     audience = [f"follower_{i}" for i in range(followers_count)]
     sample = random.sample(audience, k=min(300, len(audience)))
 
+    # Get content-type-specific weights
+    ct = content_type if content_type in ENGAGEMENT_RATE_BY_TYPE else "unclassified"
+    engage_rate = ENGAGEMENT_RATE_BY_TYPE[ct]
+    platform_w = PLATFORM_WEIGHTS_BY_TYPE.get(ct, PLATFORM_WEIGHTS_BY_TYPE["unclassified"])
+    persona_w = PERSONA_WEIGHTS_BY_TYPE.get(ct, PERSONA_WEIGHTS_BY_TYPE["unclassified"])
+    interaction_dist = INTERACTION_TYPE_BY_CONTENT.get(ct, INTERACTION_TYPE_BY_CONTENT["unclassified"])
+
     interactions = []
 
     for user_id in sample:
-        prob = random.random()
-        random_seconds = random.randint(0, max(delta_seconds, 1))
-        interaction_time = schedule_date + timedelta(seconds=random_seconds)
+        # Skip based on content-type engagement rate
+        if random.random() > engage_rate:
+            continue
 
-        if prob < 0.6:
+        # Pick a realistic hour, then a random day offset & minute
+        hour = _pick_weighted_hour()
+        day_offset = random.randint(0, delta_days - 1)
+        minute = random.randint(0, 59)
+        second = random.randint(0, 59)
+        interaction_time = schedule_date + timedelta(days=day_offset, hours=hour - schedule_date.hour, minutes=minute, seconds=second)
+        # Clamp to valid range
+        if interaction_time < schedule_date:
+            interaction_time = schedule_date + timedelta(hours=hour, minutes=minute)
+        if interaction_time > now:
+            interaction_time = now - timedelta(minutes=random.randint(1, 60))
+
+        # Pick interaction type based on content type
+        roll = random.random()
+        if roll < interaction_dist["like"]:
             interaction = {"type": "like"}
-        elif prob < 0.8:
+        elif roll < interaction_dist["like"] + interaction_dist["comment"]:
             interaction = {"type": "comment", "content": random.choice(COMMENTS)}
-        elif prob < 0.9:
-            interaction = {"type": "share"}
         else:
-            continue  # 10% ne font rien
+            interaction = {"type": "share"}
+
+        # Pick platform, persona, location, industry — all weighted
+        platform = _pick_weighted(platform_w)
+        persona = _pick_weighted(persona_w)
+        location_w = LOCATION_WEIGHTS_BY_PLATFORM.get(platform, LOCATION_WEIGHTS_BY_PLATFORM["LinkedIn"])
+        industry_w = INDUSTRY_WEIGHTS_BY_PERSONA.get(persona, INDUSTRY_WEIGHTS_BY_PERSONA["Entrepreneurs"])
 
         interaction.update({
             "post_id": post_id_str,
             "user_id": user_id,
             "created_at": interaction_time,
-            "persona": random.choice(PERSONAS),
-            "platform": random.choice(PLATFORMS),
-            "location": random.choice(LOCATIONS),
-            "industry": random.choice(INDUSTRIES)
+            "persona": persona,
+            "platform": platform,
+            "location": _pick_weighted(location_w),
+            "industry": _pick_weighted(industry_w)
         })
         interactions.append(interaction)
 
@@ -152,7 +276,7 @@ def reset_and_generate():
             })
             continue
 
-        interactions = _generate_for_post(post_id_str, schedule_date, now)
+        interactions = _generate_for_post(post_id_str, schedule_date, now, post.get("content_type", "unclassified"))
         current_app.mongo.interactions.insert_many(interactions)
         total_interactions += len(interactions)
         processed.append({
@@ -214,7 +338,7 @@ def generate_realistic_interactions():
             })
             continue
 
-        interactions = _generate_for_post(post_id_str, schedule_date, now)
+        interactions = _generate_for_post(post_id_str, schedule_date, now, post.get("content_type", "unclassified"))
         current_app.mongo.interactions.insert_many(interactions)
         total_interactions += len(interactions)
         processed.append({
@@ -298,7 +422,7 @@ def audience_analytics():
             continue
         existing = current_app.mongo.interactions.count_documents({"post_id": post_id_str})
         if existing == 0:
-            new_interactions = _generate_for_post(post_id_str, schedule_date, now)
+            new_interactions = _generate_for_post(post_id_str, schedule_date, now, post.get("content_type", "unclassified"))
             current_app.mongo.interactions.insert_many(new_interactions)
 
     interactions = list(current_app.mongo.interactions.find({"post_id": {"$in": user_post_ids}}))
@@ -308,6 +432,11 @@ def audience_analytics():
     location_count = defaultdict(int)
     industry_count = defaultdict(int)
     unique_users = set()
+
+    # Per-persona engagement breakdown
+    persona_likes = defaultdict(int)
+    persona_comments = defaultdict(int)
+    persona_shares = defaultdict(int)
 
     for i in interactions:
         # Backfill missing profile fields on the fly
@@ -326,11 +455,20 @@ def audience_analytics():
                 }}
             )
 
-        persona_count[i["persona"]] += 1
+        persona = i["persona"]
+        persona_count[persona] += 1
         platform_count[i["platform"]] += 1
         location_count[i["location"]] += 1
         industry_count[i["industry"]] += 1
         unique_users.add(i.get("user_id", ""))
+
+        itype = i.get("type", "like")
+        if itype == "like":
+            persona_likes[persona] += 1
+        elif itype == "comment":
+            persona_comments[persona] += 1
+        elif itype == "share":
+            persona_shares[persona] += 1
 
     total_interactions = len(interactions)
     total_posts = len(posts) if posts else 1
@@ -383,6 +521,26 @@ def audience_analytics():
             "description": f"{top_ind_pct}% of your audience works in {top_industry} ({industry_count[top_industry]:,} interactions)"
         })
 
+    # Build per-persona engagement breakdown
+    persona_breakdown = {}
+    for p in PERSONAS:
+        total_p = persona_count.get(p, 0)
+        if total_p > 0:
+            persona_breakdown[p] = {
+                "total": total_p,
+                "likes": persona_likes.get(p, 0),
+                "comments": persona_comments.get(p, 0),
+                "shares": persona_shares.get(p, 0),
+                "like_rate": round(persona_likes.get(p, 0) / total_p * 100),
+                "comment_rate": round(persona_comments.get(p, 0) / total_p * 100),
+                "share_rate": round(persona_shares.get(p, 0) / total_p * 100),
+            }
+        else:
+            persona_breakdown[p] = {
+                "total": 0, "likes": 0, "comments": 0, "shares": 0,
+                "like_rate": 0, "comment_rate": 0, "share_rate": 0,
+            }
+
     return jsonify({
         "personas": dict(persona_count),
         "platforms": dict(platform_count),
@@ -392,7 +550,8 @@ def audience_analytics():
         "active_users": len(unique_users),
         "total_interactions": total_interactions,
         "total_posts": total_posts,
-        "insights": insights
+        "insights": insights,
+        "persona_breakdown": persona_breakdown
     })
 
 
@@ -422,7 +581,7 @@ def ai_persona_analysis():
             continue
         existing = current_app.mongo.interactions.count_documents({"post_id": post_id_str})
         if existing == 0:
-            new_interactions = _generate_for_post(post_id_str, schedule_date, now)
+            new_interactions = _generate_for_post(post_id_str, schedule_date, now, post.get("content_type", "unclassified"))
             current_app.mongo.interactions.insert_many(new_interactions)
 
     interactions = list(current_app.mongo.interactions.find({"post_id": {"$in": user_post_ids}}))
@@ -489,16 +648,20 @@ Respond in strict JSON with this format:
 Only return valid JSON, no markdown."""
 
     try:
+        api_key = current_app.config.get('OPENROUTER_API_KEY')
+        if not api_key:
+            raise ValueError("OPENROUTER_API_KEY is not configured")
+
         response = http_requests.post(
             "https://openrouter.ai/api/v1/chat/completions",
             headers={
-                "Authorization": f"Bearer {current_app.config['OPENROUTER_API_KEY']}",
+                "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
                 "HTTP-Referer": current_app.config.get("FRONTEND_URL", "http://localhost:5173"),
                 "X-Title": "AutoPoster Audience Analyzer"
             },
             json={
-                "model": current_app.config["OPENROUTER_MODEL"],
+                "model": current_app.config.get("OPENROUTER_MODEL", "openai/gpt-4o-mini"),
                 "messages": [
                     {"role": "system", "content": "You are a senior audience intelligence analyst. Decode engagement patterns, identify growth opportunities, and provide data-backed persona insights. Return strict JSON only."},
                     {"role": "user", "content": prompt}
@@ -510,6 +673,17 @@ Only return valid JSON, no markdown."""
         )
 
         result = response.json()
+
+        # Check for API-level errors
+        if "error" in result:
+            error_msg = result["error"].get("message", str(result["error"])) if isinstance(result["error"], dict) else str(result["error"])
+            print(f"[AI-PERSONA] OpenRouter API error: {error_msg}")
+            raise ValueError(f"OpenRouter API error: {error_msg}")
+
+        if "choices" not in result or not result["choices"]:
+            print(f"[AI-PERSONA] Unexpected API response: {json.dumps(result)[:500]}")
+            raise ValueError("OpenRouter returned no choices")
+
         content = result["choices"][0]["message"]["content"]
 
         # Clean markdown fences if present
@@ -572,7 +746,7 @@ def _gather_analytics_data():
             continue
         existing = current_app.mongo.interactions.count_documents({"post_id": post_id_str})
         if existing == 0:
-            new_interactions = _generate_for_post(post_id_str, schedule_date, now)
+            new_interactions = _generate_for_post(post_id_str, schedule_date, now, post.get("content_type", "unclassified"))
             current_app.mongo.interactions.insert_many(new_interactions)
 
     interactions = list(current_app.mongo.interactions.find({"post_id": {"$in": user_post_ids}}))
@@ -614,17 +788,21 @@ def _build_data_summary(data):
     )
 
 
-def _call_openrouter(prompt, system_msg="You are a senior social media analytics expert. Analyze data precisely, reference specific numbers, and provide actionable recommendations. Return strict JSON only — no markdown, no explanation."):
+def _call_openrouter(prompt, system_msg="You are an audience analytics expert. Return strict JSON only."):
+    api_key = current_app.config.get('OPENROUTER_API_KEY')
+    if not api_key:
+        raise ValueError("OPENROUTER_API_KEY is not configured")
+
     response = http_requests.post(
         "https://openrouter.ai/api/v1/chat/completions",
         headers={
-            "Authorization": f"Bearer {current_app.config['OPENROUTER_API_KEY']}",
+            "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
             "HTTP-Referer": current_app.config.get("FRONTEND_URL", "http://localhost:5173"),
             "X-Title": "AutoPoster Audience Analyzer"
         },
         json={
-            "model": current_app.config["OPENROUTER_MODEL"],
+            "model": current_app.config.get("OPENROUTER_MODEL", "openai/gpt-4o-mini"),
             "messages": [
                 {"role": "system", "content": system_msg},
                 {"role": "user", "content": prompt}
@@ -635,6 +813,14 @@ def _call_openrouter(prompt, system_msg="You are a senior social media analytics
         timeout=30
     )
     result = response.json()
+
+    if "error" in result:
+        error_msg = result["error"].get("message", str(result["error"])) if isinstance(result["error"], dict) else str(result["error"])
+        raise ValueError(f"OpenRouter API error: {error_msg}")
+
+    if "choices" not in result or not result["choices"]:
+        raise ValueError("OpenRouter returned no choices")
+
     content = result["choices"][0]["message"]["content"]
     content = content.strip()
     if content.startswith("```"):
@@ -1009,3 +1195,1131 @@ def detect_content_types():
         "classified": classified,
         "errors": errors if errors else None
     })
+
+
+# -------------------------------
+# ROUTE 10 : PERFORMANCE ANALYTICS
+# Computes engagement metrics per
+# content type, best times, platform
+# stats from real post/interaction data
+# -------------------------------
+@test_bp.route("/performance-analytics")
+@jwt_required(optional=True)
+def performance_analytics():
+    current_user_id = get_jwt_identity()
+    now = datetime.utcnow()
+
+    if current_user_id:
+        posts = list(current_app.mongo.posts.find({"user_id": current_user_id}))
+    else:
+        posts = list(current_app.mongo.posts.find())
+
+    user_post_ids = [str(post["_id"]) for post in posts]
+
+    # Auto-generate interactions for posts that don't have any yet
+    for post in posts:
+        post_id_str = str(post["_id"])
+        schedule_date = parse_schedule_date(post.get("schedule_date"))
+        if schedule_date is None or schedule_date > now:
+            continue
+        existing = current_app.mongo.interactions.count_documents({"post_id": post_id_str})
+        if existing == 0:
+            new_interactions = _generate_for_post(post_id_str, schedule_date, now, post.get("content_type", "unclassified"))
+            current_app.mongo.interactions.insert_many(new_interactions)
+
+    interactions = list(current_app.mongo.interactions.find({"post_id": {"$in": user_post_ids}}))
+    total_all_interactions = len(interactions)
+
+    # --- Engagement per content type ---
+    content_type_interactions = defaultdict(lambda: {"likes": 0, "comments": 0, "shares": 0, "total": 0, "post_count": 0})
+    post_content_types = {}
+    for post in posts:
+        ct = post.get("content_type", "unclassified")
+        post_content_types[str(post["_id"])] = ct
+        content_type_interactions[ct]["post_count"] += 1
+
+    for i in interactions:
+        ct = post_content_types.get(i.get("post_id"), "unclassified")
+        content_type_interactions[ct]["total"] += 1
+        t = i.get("type", "like")
+        if t == "like":
+            content_type_interactions[ct]["likes"] += 1
+        elif t == "comment":
+            content_type_interactions[ct]["comments"] += 1
+        elif t == "share":
+            content_type_interactions[ct]["shares"] += 1
+
+    engagement_by_type = []
+    for ct, stats in content_type_interactions.items():
+        pc = stats["post_count"] if stats["post_count"] > 0 else 1
+        # Calculate engagement rate as % of total interactions
+        # This shows which content type gets the highest share of all engagement
+        pct = round((stats["total"] / max(total_all_interactions, 1)) * 100, 1)
+        avg_per_post = round(stats["total"] / pc, 1)
+        engagement_by_type.append({
+            "name": ct.replace("_", " ").title(),
+            "value": pct,
+            "avg_per_post": avg_per_post,
+            "likes": stats["likes"],
+            "comments": stats["comments"],
+            "shares": stats["shares"],
+            "post_count": stats["post_count"],
+            "total_interactions": stats["total"]
+        })
+    engagement_by_type.sort(key=lambda x: x["value"], reverse=True)
+
+    # --- Best posting times (engagement by hour of day) ---
+    hour_engagement = defaultdict(int)
+    for i in interactions:
+        created = i.get("created_at")
+        if isinstance(created, datetime):
+            hour_engagement[created.hour] += 1
+
+    best_time_data = []
+    for h in range(0, 24, 2):
+        total = hour_engagement.get(h, 0) + hour_engagement.get(h + 1, 0)
+        ampm = "AM" if h < 12 else "PM"
+        display_h = h if h <= 12 else h - 12
+        if display_h == 0:
+            display_h = 12
+        best_time_data.append({
+            "hour": f"{display_h} {ampm}",
+            "engagement": total
+        })
+
+    best_hour = max(hour_engagement, key=hour_engagement.get) if hour_engagement else 14
+    ampm = "AM" if best_hour < 12 else "PM"
+    display_best = best_hour if best_hour <= 12 else best_hour - 12
+    if display_best == 0:
+        display_best = 12
+    best_time_str = f"{display_best}:00 {ampm}"
+
+    # --- Platform stats ---
+    platform_count = defaultdict(int)
+    platform_post_count = defaultdict(int)
+    post_platforms = {}
+    for post in posts:
+        # Assign platform from interactions or default
+        post_platforms[str(post["_id"])] = set()
+
+    for i in interactions:
+        plat = i.get("platform", "Unknown")
+        platform_count[plat] += 1
+        pid = i.get("post_id")
+        if pid in post_platforms:
+            post_platforms[pid].add(plat)
+
+    # Count posts per platform
+    for pid, plats in post_platforms.items():
+        for plat in plats:
+            platform_post_count[plat] += 1
+
+    top_platform = max(platform_count, key=platform_count.get) if platform_count else "LinkedIn"
+
+    # --- Per-platform engagement rate as % ---
+    # engagement % per platform = interactions on platform / total interactions * 100
+    # This shows each platform's share of engagement
+    platform_engagement_pct = {}
+    for plat, count in platform_count.items():
+        pct = round((count / max(total_all_interactions, 1)) * 100, 1)
+        platform_engagement_pct[plat] = pct
+
+    # --- Overall engagement ---
+    total_interactions = len(interactions)
+    total_posts = len(posts) if posts else 1
+    avg_per_post = round(total_interactions / total_posts, 1)
+    avg_engagement_pct = avg_per_post
+
+    # --- Day of week breakdown ---
+    day_engagement = defaultdict(int)
+    day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    for i in interactions:
+        created = i.get("created_at")
+        if isinstance(created, datetime):
+            day_engagement[day_names[created.weekday()]] += 1
+
+    best_day = max(day_engagement, key=day_engagement.get) if day_engagement else "Tuesday"
+
+    return jsonify({
+        "engagement_by_type": engagement_by_type,
+        "best_time_data": best_time_data,
+        "best_time": best_time_str,
+        "best_day": best_day,
+        "top_platform": top_platform,
+        "platforms": dict(platform_count),
+        "platform_engagement_pct": platform_engagement_pct,
+        "avg_engagement_pct": avg_engagement_pct,
+        "total_interactions": total_interactions,
+        "total_posts": total_posts,
+        "day_engagement": dict(day_engagement)
+    })
+
+
+# -------------------------------
+# ROUTE 11 : AI PERFORMANCE RECOMMENDATIONS
+# Sends performance data to OpenRouter
+# for AI-powered optimization suggestions
+# -------------------------------
+@test_bp.route("/ai-performance-recommendations")
+@jwt_required(optional=True)
+def ai_performance_recommendations():
+    try:
+        data = _gather_analytics_data()
+
+        # Also gather content type info
+        current_user_id = get_jwt_identity()
+        if current_user_id:
+            posts = list(current_app.mongo.posts.find({"user_id": current_user_id}))
+        else:
+            posts = list(current_app.mongo.posts.find())
+
+        content_type_count = defaultdict(int)
+        for p in posts:
+            ct = p.get("content_type", "unclassified")
+            content_type_count[ct] += 1
+
+        user_post_ids = [str(post["_id"]) for post in posts]
+        interactions = list(current_app.mongo.interactions.find({"post_id": {"$in": user_post_ids}}))
+
+        # Hour/day breakdown
+        hour_engagement = defaultdict(int)
+        day_engagement = defaultdict(int)
+        day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+        for i in interactions:
+            created = i.get("created_at")
+            if isinstance(created, datetime):
+                hour_engagement[created.hour] += 1
+                day_engagement[day_names[created.weekday()]] += 1
+
+        data_summary = _build_data_summary(data)
+        data_summary += f"\n\nContent type distribution: {dict(content_type_count)}"
+        data_summary += f"\nHour engagement (key=hour 0-23): {dict(hour_engagement)}"
+        data_summary += f"\nDay engagement: {dict(day_engagement)}"
+
+        prompt = f"""You are a social media performance optimization AI expert. Analyze this data and provide specific, actionable recommendations to boost engagement.
+
+DATA:
+{data_summary}
+
+Respond in strict JSON with this format:
+{{
+  "categories": [
+    {{
+      "category": "category name like Content Structure or Timing & Platform or Engagement Strategy",
+      "items": [
+        {{
+          "text": "short recommendation (max 8 words)",
+          "confidence": number 70-99,
+          "color": "green-400 or violet-400 or teal-400 or yellow-400 or blue-400 or pink-400 or cyan-400",
+          "description": "1-2 sentence explanation with specific numbers from the data"
+        }}
+      ]
+    }}
+  ],
+  "summary": {{
+    "total_recommendations": number,
+    "avg_confidence": number,
+    "potential_boost": "percentage string like +47%",
+    "posts_analyzed": {data['total_posts']}
+  }}
+}}
+
+Generate exactly 2 categories with exactly 3 items each.
+Base all recommendations on the actual data provided - use real numbers and percentages.
+Make recommendations specific and actionable, not generic.
+Only return valid JSON, no markdown."""
+
+        ai_data = _call_openrouter(
+            prompt,
+            system_msg="You are a social media performance optimization expert. Return strict JSON only."
+        )
+
+        return jsonify({
+            "success": True,
+            "categories": ai_data.get("categories", []),
+            "summary": ai_data.get("summary", {}),
+            "data_summary": data
+        })
+
+    except Exception as e:
+        print(f"[AI-PERF-RECO] Error: {e}")
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+
+# -------------------------------
+# ROUTE 12 : PERFORMANCE TRENDS
+# Returns week-over-week engagement,
+# reach expansion, and content quality
+# metrics for the Performance Trends card
+# -------------------------------
+@test_bp.route("/performance-trends")
+@jwt_required(optional=True)
+def performance_trends():
+    from flask import request as flask_request
+
+    current_user_id = get_jwt_identity()
+    now = datetime.utcnow()
+
+    period = flask_request.args.get("period", "7D")
+    if period == "30D":
+        days = 30
+    elif period == "90D":
+        days = 90
+    else:
+        days = 7
+
+    if current_user_id:
+        posts = list(current_app.mongo.posts.find({"user_id": current_user_id}))
+    else:
+        posts = list(current_app.mongo.posts.find())
+
+    user_post_ids = [str(post["_id"]) for post in posts]
+
+    # Auto-generate interactions for posts that don't have any yet
+    for post in posts:
+        post_id_str = str(post["_id"])
+        schedule_date = parse_schedule_date(post.get("schedule_date"))
+        if schedule_date is None or schedule_date > now:
+            continue
+        existing = current_app.mongo.interactions.count_documents({"post_id": post_id_str})
+        if existing == 0:
+            new_interactions = _generate_for_post(post_id_str, schedule_date, now, post.get("content_type", "unclassified"))
+            current_app.mongo.interactions.insert_many(new_interactions)
+
+    interactions = list(current_app.mongo.interactions.find({"post_id": {"$in": user_post_ids}}))
+
+    # Split interactions into time buckets
+    bucket_size = days
+    this_start = now - timedelta(days=bucket_size)
+    last_start = now - timedelta(days=bucket_size * 2)
+    prev_start = now - timedelta(days=bucket_size * 3)
+
+    this_bucket = []
+    last_bucket = []
+    prev_bucket = []
+
+    for i in interactions:
+        created = i.get("created_at")
+        if not isinstance(created, datetime):
+            continue
+        if created >= this_start:
+            this_bucket.append(i)
+        elif created >= last_start:
+            last_bucket.append(i)
+        elif created >= prev_start:
+            prev_bucket.append(i)
+
+    # --- Engagement Growth ---
+    total_this = len(this_bucket)
+    total_last = len(last_bucket)
+    total_prev = len(prev_bucket)
+
+    posts_this = max(sum(1 for p in posts if parse_schedule_date(p.get("schedule_date")) and parse_schedule_date(p.get("schedule_date")) >= this_start), 1)
+    posts_last = max(sum(1 for p in posts if parse_schedule_date(p.get("schedule_date")) and last_start <= parse_schedule_date(p.get("schedule_date")) < this_start), 1)
+    posts_prev = max(sum(1 for p in posts if parse_schedule_date(p.get("schedule_date")) and prev_start <= parse_schedule_date(p.get("schedule_date")) < last_start), 1)
+
+    eng_rate_this = round(total_this / max(posts_this, 1) * 0.05, 1)
+    eng_rate_last = round(total_last / max(posts_last, 1) * 0.05, 1)
+    eng_rate_prev = round(total_prev / max(posts_prev, 1) * 0.05, 1)
+
+    eng_growth_pct = round(((eng_rate_this - eng_rate_last) / max(eng_rate_last, 0.1)) * 100) if eng_rate_last > 0 else 0
+
+    # --- Reach Expansion ---
+    unique_this = len(set(i.get("user_id", "") for i in this_bucket))
+    unique_last = len(set(i.get("user_id", "") for i in last_bucket))
+    unique_total = len(set(i.get("user_id", "") for i in interactions))
+    total_impressions = total_this + total_last + total_prev
+    avg_per_post = round(total_impressions / max(len(posts), 1), 1)
+    reach_change = unique_this - unique_last
+
+    def _fmt(n):
+        if n >= 1000:
+            return f"{round(n / 1000, 1)}K"
+        return str(n)
+
+    # --- Content Quality ---
+    shares_this = sum(1 for i in this_bucket if i.get("type") == "share")
+    likes_this = sum(1 for i in this_bucket if i.get("type") == "like")
+    comments_this = sum(1 for i in this_bucket if i.get("type") == "comment")
+    share_rate = round((shares_this / max(total_this, 1)) * 100, 1)
+    save_rate = round((comments_this / max(total_this, 1)) * 100, 1)
+
+    engagement_quality = (shares_this * 3 + comments_this * 2 + likes_this) / max(total_this, 1)
+    avg_time_minutes = min(int(engagement_quality * 1.5), 5)
+    avg_time_seconds = random.randint(10, 59)
+
+    quality_label = "Excellent" if share_rate > 10 else "Good" if share_rate > 5 else "Average"
+
+    if days == 7:
+        labels = ["This week", "Last week", "2 weeks ago"]
+    elif days == 30:
+        labels = ["This month", "Last month", "2 months ago"]
+    else:
+        labels = ["This quarter", "Last quarter", "2 quarters ago"]
+
+    return jsonify({
+        "engagement_growth": {
+            "title": "Engagement Growth",
+            "growth_pct": eng_growth_pct,
+            "this_period": {"label": labels[0], "value": f"{eng_rate_this}%"},
+            "last_period": {"label": labels[1], "value": f"{eng_rate_last}%"},
+            "prev_period": {"label": labels[2], "value": f"{eng_rate_prev}%"}
+        },
+        "reach_expansion": {
+            "title": "Reach Expansion",
+            "change": f"+{_fmt(abs(reach_change))}" if reach_change >= 0 else f"-{_fmt(abs(reach_change))}",
+            "total_impressions": {"label": "Total impressions", "value": _fmt(total_impressions)},
+            "unique_users": {"label": "Unique users", "value": _fmt(unique_total)},
+            "avg_per_post": {"label": "Avg per post", "value": _fmt(int(avg_per_post))}
+        },
+        "content_quality": {
+            "title": "Content Quality",
+            "quality_label": quality_label,
+            "avg_time": {"label": "Avg time spent", "value": f"{avg_time_minutes}m {avg_time_seconds}s"},
+            "share_rate": {"label": "Share rate", "value": f"{share_rate}%"},
+            "save_rate": {"label": "Save rate", "value": f"{save_rate}%"}
+        },
+        "period": period
+    })
+
+
+# -------------------------------
+# ROUTE 13 : AI CONTENT IDEAS
+# Generates AI-powered content ideas
+# based on performance data
+# -------------------------------
+@test_bp.route("/ai-content-ideas")
+@jwt_required(optional=True)
+def ai_content_ideas():
+    try:
+        data = _gather_analytics_data()
+        data_summary = _build_data_summary(data)
+
+        current_user_id = get_jwt_identity()
+        if current_user_id:
+            posts = list(current_app.mongo.posts.find({"user_id": current_user_id}))
+        else:
+            posts = list(current_app.mongo.posts.find())
+
+        content_type_count = defaultdict(int)
+        for p in posts:
+            ct = p.get("content_type", "unclassified")
+            content_type_count[ct] += 1
+
+        data_summary += f"\n\nContent type distribution: {dict(content_type_count)}"
+
+        prompt = f"""You are a social media content strategist. Based on the audience data below, generate specific content ideas the user should create next.
+
+DATA:
+{data_summary}
+
+Respond in strict JSON with this format:
+{{
+  "ideas": [
+    {{
+      "title": "catchy post title (max 10 words)",
+      "description": "1-2 sentence description of the post content",
+      "content_type": "tutorial or story or insight or motivational or short_tip or opinion",
+      "target_persona": "which persona this targets",
+      "estimated_engagement": "high or medium",
+      "platform": "best platform (LinkedIn, Twitter, or Medium)",
+      "hook": "the opening line/hook for this post"
+    }}
+  ]
+}}
+
+Generate exactly 5 unique, specific content ideas. Make them actionable and ready to write.
+Base ideas on the audience data — target the most engaged personas and platforms.
+Only return valid JSON, no markdown."""
+
+        ai_data = _call_openrouter(
+            prompt,
+            system_msg="You are a social media content strategist. Return strict JSON only."
+        )
+
+        return jsonify({
+            "success": True,
+            "ideas": ai_data.get("ideas", []),
+            "data_summary": data
+        })
+
+    except Exception as e:
+        print(f"[AI-CONTENT-IDEAS] Error: {e}")
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+
+# -------------------------------
+# ROUTE 14 : ANALYTICS
+# Returns enriched posts with
+# engagement stats for the current user
+# (moved from analytics.py)
+# -------------------------------
+@test_bp.route("/api/analytics", methods=["GET"])
+@jwt_required()
+def get_analytics():
+    current_user_id = get_jwt_identity()
+
+    # Get user email to handle posts stored with email as user_id
+    try:
+        ObjectId(current_user_id)
+        current_user = current_app.mongo.users.find_one({"_id": ObjectId(current_user_id)})
+    except:
+        current_user = current_app.mongo.users.find_one({"_id": current_user_id})
+
+    user_email = current_user.get("email") if current_user else None
+
+    # Fetch only this user's posts (check both user_id and email)
+    query_conditions = [{"user_id": current_user_id}]
+
+    try:
+        ObjectId(current_user_id)
+        query_conditions.append({"user_id": ObjectId(current_user_id)})
+    except:
+        pass
+
+    if user_email:
+        query_conditions.append({"user_id": user_email})
+
+    query = {"$or": query_conditions}
+    posts = list(current_app.mongo.posts.find(query))
+
+    # Fetch interactions for these posts
+    post_ids = [str(post["_id"]) for post in posts]
+
+    interactions = list(current_app.mongo.interactions.find({
+        "post_id": {"$in": post_ids}
+    }))
+
+    # Map post_id -> interaction stats
+    post_stats = defaultdict(lambda: {"likes": 0, "comments": 0, "shares": 0})
+
+    # Map post_id -> set of platforms from interactions
+    post_platforms_from_interactions = defaultdict(set)
+
+    for inter in interactions:
+        post_id = str(inter["post_id"])
+        t = inter["type"]
+
+        if t == "like":
+            post_stats[post_id]["likes"] += 1
+        elif t == "comment":
+            post_stats[post_id]["comments"] += 1
+        elif t == "share":
+            post_stats[post_id]["shares"] += 1
+
+        # Track which platforms interactions came from
+        plat = inter.get("platform")
+        if plat:
+            post_platforms_from_interactions[post_id].add(plat)
+
+    enriched_posts = []
+
+    for post in posts:
+        pid = str(post["_id"])
+
+        stats = post_stats.get(pid, {"likes": 0, "comments": 0, "shares": 0})
+        total = stats["likes"] + stats["comments"] + stats["shares"]
+
+        # Use stored platforms, or derive from interaction data
+        post_platforms = post.get("platforms", {})
+        if not post_platforms or not any(post_platforms.values()):
+            interaction_plats = post_platforms_from_interactions.get(pid, set())
+            if interaction_plats:
+                post_platforms = {plat: True for plat in interaction_plats}
+
+        enriched_posts.append({
+            "_id": pid,
+            "content": post.get("content", ""),
+            "createdAt": post.get("created_at", post.get("schedule_date")),
+            "scheduleDate": post.get("schedule_date"),
+            "platforms": post_platforms,
+            "engagement": stats,
+            "totalEngagement": total
+        })
+
+    return jsonify(enriched_posts)
+
+
+# -------------------------------
+# HELPER: detect media type from post
+# -------------------------------
+def _detect_media_type(post):
+    """Detect media type from post document: image, video, text, or poll."""
+    content = (post.get("content") or "").lower()
+
+    # Check if post has images attached
+    images = post.get("selectedImages") or post.get("images") or post.get("media")
+    if images and (isinstance(images, list) and len(images) > 0 or isinstance(images, dict) and any(images.values())):
+        return "image"
+
+    # Check for video references
+    video_keywords = ["video", "watch", "youtube", "youtu.be", "vimeo", "loom", "mp4", "🎥", "📹"]
+    if any(kw in content for kw in video_keywords):
+        return "video"
+
+    # Check for poll/question content
+    if "?" in content and (content.count("?") >= 2 or "poll" in content or "vote" in content or "survey" in content):
+        return "poll"
+
+    return "text"
+
+
+# -------------------------------
+# ROUTE 15 : ANALYTICS BEST TIMES
+# Returns real best posting times
+# from interaction data + AI analysis
+# -------------------------------
+@test_bp.route("/api/analytics-best-times", methods=["GET"])
+@jwt_required()
+def analytics_best_times():
+    current_user_id = get_jwt_identity()
+    now = datetime.utcnow()
+
+    try:
+        ObjectId(current_user_id)
+        current_user = current_app.mongo.users.find_one({"_id": ObjectId(current_user_id)})
+    except:
+        current_user = current_app.mongo.users.find_one({"_id": current_user_id})
+
+    user_email = current_user.get("email") if current_user else None
+
+    query_conditions = [{"user_id": current_user_id}]
+    try:
+        ObjectId(current_user_id)
+        query_conditions.append({"user_id": ObjectId(current_user_id)})
+    except:
+        pass
+    if user_email:
+        query_conditions.append({"user_id": user_email})
+
+    posts = list(current_app.mongo.posts.find({"$or": query_conditions}))
+    user_post_ids = [str(post["_id"]) for post in posts]
+
+    # Auto-generate interactions for posts that don't have any yet
+    for post in posts:
+        post_id_str = str(post["_id"])
+        schedule_date = parse_schedule_date(post.get("schedule_date"))
+        if schedule_date is None or schedule_date > now:
+            continue
+        existing = current_app.mongo.interactions.count_documents({"post_id": post_id_str})
+        if existing == 0:
+            new_interactions = _generate_for_post(post_id_str, schedule_date, now, post.get("content_type", "unclassified"))
+            current_app.mongo.interactions.insert_many(new_interactions)
+
+    interactions = list(current_app.mongo.interactions.find({"post_id": {"$in": user_post_ids}}))
+    total_interactions = len(interactions)
+
+    # --- Engagement by hour of day ---
+    hour_engagement = defaultdict(lambda: {"likes": 0, "comments": 0, "shares": 0, "total": 0})
+    for i in interactions:
+        created = i.get("created_at")
+        if isinstance(created, datetime):
+            h = created.hour
+            hour_engagement[h]["total"] += 1
+            t = i.get("type", "like")
+            if t == "like":
+                hour_engagement[h]["likes"] += 1
+            elif t == "comment":
+                hour_engagement[h]["comments"] += 1
+            elif t == "share":
+                hour_engagement[h]["shares"] += 1
+
+    # --- Engagement by day of week ---
+    day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    day_engagement = defaultdict(lambda: {"total": 0, "likes": 0, "comments": 0, "shares": 0})
+    for i in interactions:
+        created = i.get("created_at")
+        if isinstance(created, datetime):
+            day_name = day_names[created.weekday()]
+            day_engagement[day_name]["total"] += 1
+            t = i.get("type", "like")
+            if t == "like":
+                day_engagement[day_name]["likes"] += 1
+            elif t == "comment":
+                day_engagement[day_name]["comments"] += 1
+            elif t == "share":
+                day_engagement[day_name]["shares"] += 1
+
+    # --- Find top 3 day+hour combos ---
+    day_hour_engagement = defaultdict(int)
+    for i in interactions:
+        created = i.get("created_at")
+        if isinstance(created, datetime):
+            key = f"{day_names[created.weekday()]}|{created.hour}"
+            day_hour_engagement[key] += 1
+
+    avg_per_slot = total_interactions / max(len(day_hour_engagement), 1)
+
+    top_slots = sorted(day_hour_engagement.items(), key=lambda x: x[1], reverse=True)[:5]
+
+    # Build raw slot data for AI
+    raw_slots = []
+    colors = ["text-cyan-400", "text-violet-400", "text-teal-400", "text-orange-400", "text-pink-400"]
+
+    for idx, (slot_key, count) in enumerate(top_slots):
+        day, hour = slot_key.split("|")
+        hour = int(hour)
+        hour_label = f"{12 if hour == 0 else hour if hour <= 12 else hour - 12}:00 {'AM' if hour < 12 else 'PM'}"
+        above_avg = round(((count - avg_per_slot) / max(avg_per_slot, 1)) * 100)
+
+        raw_slots.append({
+            "day": day,
+            "hour_label": hour_label,
+            "day_hour": f"{day}, {hour_label}",
+            "above_avg": above_avg,
+            "count": count,
+            "color": colors[idx] if idx < len(colors) else "text-gray-400"
+        })
+
+    # --- Hourly heatmap data ---
+    hourly_data = []
+    for h in range(24):
+        stats = hour_engagement.get(h, {"total": 0})
+        hourly_data.append({"hour": h, "engagement": stats["total"]})
+
+    # --- AI analysis: generate dynamic best times + insight ---
+    best_times = []
+    ai_insight = None
+    try:
+        slots_for_prompt = [{"slot": s["day_hour"], "interactions": s["count"], "above_avg_pct": s["above_avg"]} for s in raw_slots]
+
+        data_summary = f"Total interactions: {total_interactions}\n"
+        data_summary += f"Average per slot: {round(avg_per_slot, 1)}\n"
+        data_summary += f"Top time slots with interaction counts: {json.dumps(slots_for_prompt)}\n"
+        data_summary += f"Day breakdown: {dict((d, v['total']) for d, v in day_engagement.items())}\n"
+        data_summary += f"Hour breakdown (top 5): {sorted([(h, v['total']) for h, v in hour_engagement.items()], key=lambda x: x[1], reverse=True)[:5]}"
+
+        prompt = f"""You are a social media timing strategist. Analyze this engagement timing data and provide dynamic insights for EACH top time slot AND an overall recommendation.
+
+DATA:
+{data_summary}
+
+Respond in strict JSON with this EXACT format:
+{{
+  "best_times": [
+    {{
+      "slot_index": 0,
+      "desc": "unique 2-5 word description explaining WHY this slot performs well (e.g. 'Morning commute scrollers', 'Lunch break browsers', 'Weekend deep readers')"
+    }},
+    {{
+      "slot_index": 1,
+      "desc": "unique description for slot 2"
+    }},
+    {{
+      "slot_index": 2,
+      "desc": "unique description for slot 3"
+    }},
+    {{
+      "slot_index": 3,
+      "desc": "unique description for slot 4"
+    }},
+    {{
+      "slot_index": 4,
+      "desc": "unique description for slot 5"
+    }}
+  ],
+  "recommendation": "2-3 sentence actionable timing recommendation based on the patterns you see in the data",
+  "best_day": "the single best day of the week based on the data",
+  "best_hour_range": "e.g. 2:00 PM - 4:00 PM",
+  "tip": "one quick actionable tip based on what the data reveals"
+}}
+
+Rules:
+- Each desc MUST be unique - explain the audience behavior behind each time slot (e.g. why Saturday 9 AM works differently than Tuesday 2 PM)
+- Reference the actual days and hours from the data
+- Generate exactly {len(raw_slots)} entries in best_times matching the slots provided
+Only return valid JSON, no markdown."""
+
+        ai_data = _call_openrouter(prompt, system_msg="You are a social media timing optimization expert. Return strict JSON only.")
+
+        # Merge AI descriptions with raw slot data
+        ai_slots = ai_data.get("best_times", [])
+        ai_desc_map = {entry.get("slot_index", idx): entry.get("desc", "") for idx, entry in enumerate(ai_slots)}
+
+        for idx, slot in enumerate(raw_slots):
+            ai_desc = ai_desc_map.get(idx, "")
+            best_times.append({
+                "day": slot["day_hour"],
+                "desc": ai_desc if ai_desc else f"High engagement slot",
+                "value": f"+{slot['above_avg']}%" if slot["above_avg"] > 0 else f"{slot['above_avg']}%",
+                "color": slot["color"],
+                "engagement_count": slot["count"]
+            })
+
+        ai_insight = {
+            "recommendation": ai_data.get("recommendation", ""),
+            "best_day": ai_data.get("best_day", ""),
+            "best_hour_range": ai_data.get("best_hour_range", ""),
+            "tip": ai_data.get("tip", "")
+        }
+
+    except Exception as e:
+        print(f"[BEST-TIMES-AI] Error: {e}")
+        # Fallback: use raw data without AI descriptions
+        fallback_descs = ["Peak engagement window", "High performance time", "Strong engagement slot", "Consistent performer", "Rising engagement"]
+        for idx, slot in enumerate(raw_slots):
+            best_times.append({
+                "day": slot["day_hour"],
+                "desc": fallback_descs[idx] if idx < len(fallback_descs) else "Good performance",
+                "value": f"+{slot['above_avg']}%" if slot["above_avg"] > 0 else f"{slot['above_avg']}%",
+                "color": slot["color"],
+                "engagement_count": slot["count"]
+            })
+
+    return jsonify({
+        "best_times": best_times,
+        "hourly_data": hourly_data,
+        "day_engagement": {d: dict(v) for d, v in day_engagement.items()},
+        "total_interactions": total_interactions,
+        "total_posts": len(posts),
+        "ai_insight": ai_insight
+    })
+
+
+# -------------------------------
+# ROUTE 16 : ANALYTICS CONTENT PERFORMANCE
+# Returns real media type stats
+# (image, video, text, poll) from posts
+# -------------------------------
+@test_bp.route("/api/analytics-content-performance", methods=["GET"])
+@jwt_required()
+def analytics_content_performance():
+    current_user_id = get_jwt_identity()
+    now = datetime.utcnow()
+
+    try:
+        ObjectId(current_user_id)
+        current_user = current_app.mongo.users.find_one({"_id": ObjectId(current_user_id)})
+    except:
+        current_user = current_app.mongo.users.find_one({"_id": current_user_id})
+
+    user_email = current_user.get("email") if current_user else None
+
+    query_conditions = [{"user_id": current_user_id}]
+    try:
+        ObjectId(current_user_id)
+        query_conditions.append({"user_id": ObjectId(current_user_id)})
+    except:
+        pass
+    if user_email:
+        query_conditions.append({"user_id": user_email})
+
+    posts = list(current_app.mongo.posts.find({"$or": query_conditions}))
+    user_post_ids = [str(post["_id"]) for post in posts]
+
+    # Auto-generate interactions for posts that don't have any yet
+    for post in posts:
+        post_id_str = str(post["_id"])
+        schedule_date = parse_schedule_date(post.get("schedule_date"))
+        if schedule_date is None or schedule_date > now:
+            continue
+        existing = current_app.mongo.interactions.count_documents({"post_id": post_id_str})
+        if existing == 0:
+            new_interactions = _generate_for_post(post_id_str, schedule_date, now, post.get("content_type", "unclassified"))
+            current_app.mongo.interactions.insert_many(new_interactions)
+
+    interactions = list(current_app.mongo.interactions.find({"post_id": {"$in": user_post_ids}}))
+
+    # Build post_id -> interaction stats map
+    post_interaction_stats = defaultdict(lambda: {"likes": 0, "comments": 0, "shares": 0, "total": 0})
+    for inter in interactions:
+        pid = str(inter["post_id"])
+        post_interaction_stats[pid]["total"] += 1
+        t = inter.get("type", "like")
+        if t == "like":
+            post_interaction_stats[pid]["likes"] += 1
+        elif t == "comment":
+            post_interaction_stats[pid]["comments"] += 1
+        elif t == "share":
+            post_interaction_stats[pid]["shares"] += 1
+
+    # Classify each post by media type and aggregate stats
+    media_stats = defaultdict(lambda: {
+        "posts": 0, "total_engagement": 0, "likes": 0, "comments": 0, "shares": 0,
+        "sample_posts": []
+    })
+
+    for post in posts:
+        pid = str(post["_id"])
+        media_type = _detect_media_type(post)
+        stats = post_interaction_stats.get(pid, {"likes": 0, "comments": 0, "shares": 0, "total": 0})
+
+        media_stats[media_type]["posts"] += 1
+        media_stats[media_type]["total_engagement"] += stats["total"]
+        media_stats[media_type]["likes"] += stats["likes"]
+        media_stats[media_type]["comments"] += stats["comments"]
+        media_stats[media_type]["shares"] += stats["shares"]
+
+        # Keep up to 3 sample post previews
+        if len(media_stats[media_type]["sample_posts"]) < 3:
+            media_stats[media_type]["sample_posts"].append({
+                "content": (post.get("content") or "")[:80],
+                "engagement": stats["total"]
+            })
+
+    # Build response with percentages
+    total_engagement = sum(v["total_engagement"] for v in media_stats.values())
+    max_avg = 0
+
+    content_performance = []
+    type_config = {
+        "image": {"label": "Image Posts", "icon": "faImage", "color": "bg-cyan-400"},
+        "video": {"label": "Video Content", "icon": "faVideo", "color": "bg-violet-400"},
+        "text": {"label": "Text Only", "icon": "faAlignLeft", "color": "bg-teal-400"},
+        "poll": {"label": "Polls & Questions", "icon": "faPoll", "color": "bg-orange-400"},
+    }
+
+    # First pass: calculate averages
+    for media_type in ["image", "video", "text", "poll"]:
+        stats = media_stats.get(media_type, {"posts": 0, "total_engagement": 0})
+        avg = stats["total_engagement"] / max(stats["posts"], 1)
+        if avg > max_avg:
+            max_avg = avg
+
+    # Second pass: build output
+    for media_type in ["image", "video", "text", "poll"]:
+        stats = media_stats.get(media_type, {
+            "posts": 0, "total_engagement": 0, "likes": 0, "comments": 0, "shares": 0, "sample_posts": []
+        })
+        config = type_config[media_type]
+        avg = stats["total_engagement"] / max(stats["posts"], 1)
+        pct = round((avg / max_avg) * 100) if max_avg > 0 else 0
+
+        content_performance.append({
+            "label": config["label"],
+            "icon": config["icon"],
+            "color": config["color"],
+            "value": pct,
+            "posts": stats["posts"],
+            "avgEngagement": round(avg),
+            "totalEngagement": stats["total_engagement"],
+            "likes": stats["likes"],
+            "comments": stats["comments"],
+            "shares": stats["shares"],
+            "sample_posts": stats["sample_posts"]
+        })
+
+    # Sort by value descending
+    content_performance.sort(key=lambda x: x["value"], reverse=True)
+
+    return jsonify({
+        "content_performance": content_performance,
+        "total_posts": len(posts),
+        "total_engagement": total_engagement
+    })
+
+
+# -------------------------------
+# ROUTE 17 : AI ANALYTICS INSIGHTS
+# Generates 3 AI-powered insight cards:
+# Content Suggestion, Timing Optimization,
+# Growth Opportunity — from real data
+# -------------------------------
+@test_bp.route("/api/analytics-ai-insights", methods=["GET"])
+@jwt_required()
+def analytics_ai_insights():
+    current_user_id = get_jwt_identity()
+    now = datetime.utcnow()
+
+    try:
+        ObjectId(current_user_id)
+        current_user = current_app.mongo.users.find_one({"_id": ObjectId(current_user_id)})
+    except Exception:
+        current_user = current_app.mongo.users.find_one({"_id": current_user_id})
+
+    user_email = current_user.get("email") if current_user else None
+
+    query_conditions = [{"user_id": current_user_id}]
+    try:
+        ObjectId(current_user_id)
+        query_conditions.append({"user_id": ObjectId(current_user_id)})
+    except Exception:
+        pass
+    if user_email:
+        query_conditions.append({"user_id": user_email})
+
+    posts = list(current_app.mongo.posts.find({"$or": query_conditions}))
+    user_post_ids = [str(post["_id"]) for post in posts]
+
+    # Auto-generate interactions for posts that don't have any yet
+    for post in posts:
+        post_id_str = str(post["_id"])
+        schedule_date = parse_schedule_date(post.get("schedule_date"))
+        if schedule_date is None or schedule_date > now:
+            continue
+        existing = current_app.mongo.interactions.count_documents({"post_id": post_id_str})
+        if existing == 0:
+            new_interactions = _generate_for_post(post_id_str, schedule_date, now, post.get("content_type", "unclassified"))
+            current_app.mongo.interactions.insert_many(new_interactions)
+
+    interactions = list(current_app.mongo.interactions.find({"post_id": {"$in": user_post_ids}}))
+    total_interactions = len(interactions)
+    total_posts = len(posts) if posts else 1
+
+    # --- Gather comprehensive data for AI ---
+    # Platform stats
+    platform_count = defaultdict(int)
+    platform_post_count = defaultdict(int)
+    post_platforms_map = defaultdict(set)
+
+    # Content type stats
+    content_type_count = defaultdict(int)
+    content_type_engagement = defaultdict(int)
+
+    # Timing stats
+    hour_engagement = defaultdict(int)
+    day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    day_engagement = defaultdict(int)
+
+    # Persona/location/industry
+    persona_count = defaultdict(int)
+    location_count = defaultdict(int)
+    industry_count = defaultdict(int)
+
+    # Engagement breakdown
+    total_likes = 0
+    total_comments = 0
+    total_shares = 0
+
+    for i in interactions:
+        plat = i.get("platform", "Unknown")
+        platform_count[plat] += 1
+        pid = i.get("post_id")
+        if pid:
+            post_platforms_map[pid].add(plat)
+
+        created = i.get("created_at")
+        if isinstance(created, datetime):
+            hour_engagement[created.hour] += 1
+            day_engagement[day_names[created.weekday()]] += 1
+
+        persona_count[i.get("persona", "Unknown")] += 1
+        location_count[i.get("location", "Unknown")] += 1
+        industry_count[i.get("industry", "Unknown")] += 1
+
+        t = i.get("type", "like")
+        if t == "like":
+            total_likes += 1
+        elif t == "comment":
+            total_comments += 1
+        elif t == "share":
+            total_shares += 1
+
+    for post in posts:
+        ct = post.get("content_type", "unclassified")
+        content_type_count[ct] += 1
+        # Check platforms from post document
+        plats = post.get("platforms", {})
+        if plats:
+            for p, enabled in plats.items():
+                if enabled:
+                    platform_post_count[p] += 1
+
+    # Also count from interaction-derived platforms
+    for pid, plats in post_platforms_map.items():
+        for plat in plats:
+            if plat not in platform_post_count or platform_post_count[plat] == 0:
+                platform_post_count[plat] += 1
+
+    # Content type engagement
+    post_ct_map = {str(p["_id"]): p.get("content_type", "unclassified") for p in posts}
+    for i in interactions:
+        ct = post_ct_map.get(i.get("post_id"), "unclassified")
+        content_type_engagement[ct] += 1
+
+    # Best hours
+    top_hours = sorted(hour_engagement.items(), key=lambda x: x[1], reverse=True)[:3]
+    top_days = sorted(day_engagement.items(), key=lambda x: x[1], reverse=True)[:3]
+
+    # Best content types by avg engagement
+    ct_avg = {}
+    for ct, count in content_type_count.items():
+        ct_avg[ct] = round(content_type_engagement.get(ct, 0) / max(count, 1), 1)
+
+    engagement_rate = round(total_interactions / total_posts, 2)
+
+    # Build data summary for AI
+    data_summary = (
+        f"Total posts: {total_posts}\n"
+        f"Total interactions: {total_interactions}\n"
+        f"Engagement rate: {engagement_rate} interactions/post\n"
+        f"Likes: {total_likes}, Comments: {total_comments}, Shares: {total_shares}\n\n"
+        f"Platform interaction counts: {dict(platform_count)}\n"
+        f"Platform post counts: {dict(platform_post_count)}\n"
+        f"Content type counts: {dict(content_type_count)}\n"
+        f"Content type avg engagement: {ct_avg}\n"
+        f"Top personas: {dict(persona_count)}\n"
+        f"Top locations: {dict(location_count)}\n"
+        f"Top industries: {dict(industry_count)}\n"
+        f"Top hours (hour, count): {top_hours}\n"
+        f"Top days (day, count): {top_days}\n"
+    )
+
+    prompt = f"""You are a social media analytics AI expert. Analyze this REAL engagement data and generate 3 specific, data-driven insight cards.
+
+DATA:
+{data_summary}
+
+Respond in strict JSON with this EXACT format:
+{{
+  "content_suggestion": {{
+    "title": "short 3-5 word title",
+    "text": "2-3 sentences with SPECIFIC numbers from the data. Which content type performs best? How much better? What should the user create more of?",
+    "footer": "Based on X posts analyzed"
+  }},
+  "timing_optimization": {{
+    "title": "short 3-5 word title",
+    "text": "2-3 sentences with SPECIFIC times and days from the data. When exactly should they post? How much better is that time vs average?",
+    "footer": "Based on X interactions analyzed"
+  }},
+  "growth_opportunity": {{
+    "title": "short 3-5 word title",
+    "text": "2-3 sentences about platform strategy OR audience targeting. Use real platform percentages. Which platform to double down on or expand to? Which persona/industry to target?",
+    "footer": "Estimated reach: X based on engagement"
+  }}
+}}
+
+Rules:
+- Use REAL numbers from the data — never make up statistics
+- Be specific and actionable, not generic
+- Reference actual content types, platforms, days, hours from the data
+- Each insight must be unique and cover a different angle
+Only return valid JSON, no markdown."""
+
+    try:
+        ai_data = _call_openrouter(
+            prompt,
+            system_msg="You are a social media analytics expert. Return strict JSON only."
+        )
+
+        return jsonify({
+            "success": True,
+            "content_suggestion": ai_data.get("content_suggestion", {}),
+            "timing_optimization": ai_data.get("timing_optimization", {}),
+            "growth_opportunity": ai_data.get("growth_opportunity", {}),
+            "data_summary": {
+                "total_posts": total_posts,
+                "total_interactions": total_interactions,
+                "engagement_rate": engagement_rate,
+                "estimated_reach": total_interactions * 15
+            }
+        })
+
+    except Exception as e:
+        print(f"[AI-ANALYTICS-INSIGHTS] Error: {e}")
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "data_summary": {
+                "total_posts": total_posts,
+                "total_interactions": total_interactions,
+                "engagement_rate": engagement_rate,
+                "estimated_reach": total_interactions * 15
+            }
+        }), 500

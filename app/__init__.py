@@ -134,7 +134,6 @@ def create_app():
     from .routes.posts import posts_bp
     from .routes.voice import voice_bp
     from .routes.test_route import test_bp
-    from .routes.analytics import analytics_bp
     from .routes.trends import trends_bp
     from .routes.news import news_bp
     from .routes.oauth_medium import oauth_medium_bp
@@ -142,6 +141,9 @@ def create_app():
     from .routes.images import images_bp
     from .routes.media import media_bp
     from .routes.video_builder import video_builder_bp
+    from .routes.ai_ideas import ai_ideas_bp
+    from .routes.ai_generate import ai_generate_bp
+    from .routes.ab_test import ab_test_bp
 
     # Register all blueprints in organized manner
     app.register_blueprint(oauth_linkedin_bp)
@@ -152,7 +154,6 @@ def create_app():
     app.register_blueprint(posts_bp)
     app.register_blueprint(voice_bp)
     app.register_blueprint(test_bp)
-    app.register_blueprint(analytics_bp, url_prefix="/api")
     app.register_blueprint(trends_bp)
     app.register_blueprint(news_bp)
     app.register_blueprint(oauth_medium_bp)
@@ -160,6 +161,9 @@ def create_app():
     app.register_blueprint(images_bp)
     app.register_blueprint(media_bp)
     app.register_blueprint(video_builder_bp)
+    app.register_blueprint(ai_ideas_bp, url_prefix="/api/ai-ideas")
+    app.register_blueprint(ai_generate_bp, url_prefix="/api/ai/generate")
+    app.register_blueprint(ab_test_bp)
 
     # Route health
     @app.get("/api/health")
