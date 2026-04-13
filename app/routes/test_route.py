@@ -452,26 +452,38 @@ def ai_persona_analysis():
         f"Industry distribution: {dict(industry_count)}"
     )
 
-    prompt = f"""You are an audience analytics AI expert. Analyze this social media engagement data and provide actionable persona insights.
+    prompt = f"""You are a senior social media strategist and audience intelligence analyst. Analyze this engagement data to uncover deep audience personas, behavioral patterns, and growth opportunities.
 
 DATA:
 {data_summary}
+
+ANALYSIS FRAMEWORK:
+1. PERSONA DECODING: Don't just label personas — explain their behavior, motivation, and content preferences
+2. ENGAGEMENT PATTERNS: Identify what drives each persona to interact (comment vs like vs share)
+3. TIMING INTELLIGENCE: Map personas to their peak activity windows based on platform + industry patterns
+4. GROWTH VECTORS: Find the gap between current performance and untapped potential
+
+PERSONA INSIGHT RULES:
+- Each persona must have a SPECIFIC, actionable engagement tip (not generic "post more")
+- best_content must reference actual content formats (carousel, thread, long-form, video, poll, infographic)
+- best_time must include day AND time with timezone reasoning
+- growth_potential must be justified by the data, not arbitrary
 
 Respond in strict JSON with this format:
 {{
   "persona_insights": [
     {{
       "persona": "persona name",
-      "icon": "fontawesome icon class (fa-rocket, fa-graduation-cap, fa-feather, fa-chart-line)",
+      "icon": "fontawesome icon class (fa-rocket, fa-graduation-cap, fa-feather, fa-chart-line, fa-briefcase, fa-users, fa-lightbulb, fa-code)",
       "color": "cyan or violet or teal or yellow",
-      "engagement_tip": "one sentence tip to engage this persona better",
-      "best_content": "what content type works best",
-      "best_time": "best posting time like Tuesday 2:00 PM",
+      "engagement_tip": "one specific, actionable tip referencing this persona's behavior pattern",
+      "best_content": "specific content format + topic type that resonates with this persona",
+      "best_time": "specific day and time like Tuesday 2:00 PM, with brief reasoning",
       "growth_potential": "low/medium/high"
     }}
   ],
-  "overall_strategy": "2-3 sentence overall content strategy recommendation",
-  "top_opportunity": "1 sentence about biggest growth opportunity"
+  "overall_strategy": "2-3 sentence strategy that connects persona insights into a cohesive content plan. Reference specific data points.",
+  "top_opportunity": "1 sentence identifying the single highest-ROI action based on the data"
 }}
 
 Only return valid JSON, no markdown."""
@@ -488,10 +500,11 @@ Only return valid JSON, no markdown."""
             json={
                 "model": current_app.config["OPENROUTER_MODEL"],
                 "messages": [
-                    {"role": "system", "content": "You are an audience analytics expert. Return strict JSON only."},
+                    {"role": "system", "content": "You are a senior audience intelligence analyst. Decode engagement patterns, identify growth opportunities, and provide data-backed persona insights. Return strict JSON only."},
                     {"role": "user", "content": prompt}
                 ],
-                "temperature": 0.7
+                "temperature": 0.7,
+                "max_tokens": 2000
             },
             timeout=30
         )
@@ -601,7 +614,7 @@ def _build_data_summary(data):
     )
 
 
-def _call_openrouter(prompt, system_msg="You are an audience analytics expert. Return strict JSON only."):
+def _call_openrouter(prompt, system_msg="You are a senior social media analytics expert. Analyze data precisely, reference specific numbers, and provide actionable recommendations. Return strict JSON only — no markdown, no explanation."):
     response = http_requests.post(
         "https://openrouter.ai/api/v1/chat/completions",
         headers={
@@ -616,7 +629,8 @@ def _call_openrouter(prompt, system_msg="You are an audience analytics expert. R
                 {"role": "system", "content": system_msg},
                 {"role": "user", "content": prompt}
             ],
-            "temperature": 0.7
+            "temperature": 0.7,
+            "max_tokens": 2000
         },
         timeout=30
     )
@@ -643,29 +657,37 @@ def ai_audience_insights():
         data = _gather_analytics_data()
         data_summary = _build_data_summary(data)
 
-        prompt = f"""You are a social media analytics AI expert. Analyze this engagement data and provide actionable insights.
+        prompt = f"""You are a data-driven social media intelligence analyst. Extract non-obvious, actionable insights from this engagement data. Go beyond surface-level observations — find patterns, correlations, and opportunities hidden in the numbers.
 
 DATA:
 {data_summary}
+
+INSIGHT GENERATION FRAMEWORK:
+1. CORRELATION MINING: Find connections between personas, platforms, locations, and industries
+2. ANOMALY DETECTION: Identify surprising patterns (e.g., unusually high engagement from unexpected segments)
+3. OPPORTUNITY GAPS: Find underserved segments with high potential
+4. COMPETITIVE INTELLIGENCE: What do the platform distributions reveal about audience behavior?
+
+QUALITY RULES FOR EACH INSIGHT:
+- Title must be specific and attention-grabbing (not "Good engagement" — instead "Tech Professionals Drive 73% of LinkedIn Shares")
+- Description must reference SPECIFIC numbers from the data
+- Each insight must suggest a CONCRETE action the user can take
+- Insights must cover DIFFERENT dimensions (don't repeat the same angle)
+- Prioritize insights by potential business impact
 
 Respond in strict JSON with this format:
 {{
   "insights": [
     {{
-      "icon": "fontawesome icon class (e.g. fa-users, fa-share-nodes, fa-globe, fa-briefcase, fa-lightbulb, fa-chart-line, fa-fire, fa-bullseye)",
+      "icon": "fontawesome icon class (e.g. fa-users, fa-share-nodes, fa-globe, fa-briefcase, fa-lightbulb, fa-chart-line, fa-fire, fa-bullseye, fa-eye, fa-trophy)",
       "color": "cyan or violet or teal or yellow",
-      "title": "short insight title (max 10 words)",
-      "description": "1-2 sentence actionable description with specific numbers from the data"
+      "title": "specific, data-backed insight title (max 10 words)",
+      "description": "1-2 sentence actionable description referencing specific numbers from the data. End with a recommended action."
     }}
   ]
 }}
 
-Generate exactly 4-5 unique, data-driven insights. Focus on:
-- Which persona to target and why
-- Which platform is performing best and how to leverage it
-- Geographic opportunities
-- Industry-specific engagement patterns
-- Content timing or format recommendations
+Generate exactly 4-5 unique, data-driven insights. Each must pass this test: "Would a social media manager change their strategy based on this?"
 
 Only return valid JSON, no markdown."""
 
@@ -696,40 +718,56 @@ def ai_generate_strategy():
         data = _gather_analytics_data()
         data_summary = _build_data_summary(data)
 
-        prompt = f"""You are a social media strategist AI. Based on the audience data below, generate a comprehensive content strategy.
+        prompt = f"""You are a senior social media strategist who has managed content strategies for brands with 100K+ followers. Build a comprehensive, data-driven content strategy based on the audience data below.
 
 DATA:
 {data_summary}
+
+STRATEGY BUILDING METHODOLOGY:
+
+1. AUDIENCE-FIRST SCHEDULING: Map each persona to optimal posting windows based on their industry, platform preference, and engagement patterns. Don't guess — derive from data.
+
+2. CONTENT MIX OPTIMIZATION: Recommend content types based on what resonates with the actual audience composition. Consider: educational content for professional personas, storytelling for creative personas, data-driven content for analytical personas.
+
+3. PLATFORM STRATEGY: Each platform serves a different purpose in the funnel. Define the role of each platform (awareness, engagement, conversion, thought leadership).
+
+4. QUICK WINS: Identify 3 specific actions that can be implemented THIS WEEK for immediate impact.
+
+QUALITY REQUIREMENTS:
+- Every recommendation must reference specific data points
+- Posting times must include timezone reasoning based on audience location
+- Content mix percentages must add up to 100%
+- Quick wins must be concrete (not "post more" — instead "Create a Tuesday 2PM LinkedIn carousel targeting Tech Professionals about [specific topic]")
 
 Respond in strict JSON with this format:
 {{
   "posting_schedule": [
     {{
-      "persona": "persona name",
-      "best_time": "e.g. Tuesday 2:00 PM",
-      "audience_pct": percentage number,
-      "tip": "one sentence posting tip"
+      "persona": "persona name from data",
+      "best_time": "specific day and time (e.g. Tuesday 2:00 PM EST)",
+      "audience_pct": percentage number based on actual data,
+      "tip": "specific posting tip for this persona, referencing their platform and content preferences"
     }}
   ],
   "content_mix": [
     {{
-      "type": "content type name",
-      "percentage": percentage number,
-      "description": "why this content type works"
+      "type": "content type name (e.g. Educational Carousels, Story-driven Posts, Data Insights, Industry Commentary)",
+      "percentage": percentage number (all must sum to 100),
+      "description": "why this content type works for YOUR specific audience composition"
     }}
   ],
   "platform_focus": [
     {{
-      "platform": "platform name",
-      "strategy": "1-2 sentence strategy for this platform"
+      "platform": "platform name from data",
+      "strategy": "1-2 sentence platform-specific strategy referencing which personas are active there"
     }}
   ],
-  "overall_strategy": "2-3 sentence overall content strategy recommendation",
-  "top_opportunity": "1 sentence about biggest growth opportunity",
-  "quick_wins": ["actionable quick win 1", "actionable quick win 2", "actionable quick win 3"]
+  "overall_strategy": "2-3 sentence cohesive strategy that ties together scheduling, content mix, and platform focus. Reference key data points.",
+  "top_opportunity": "1 sentence identifying the single biggest growth lever with expected impact",
+  "quick_wins": ["specific actionable quick win 1 with target persona and platform", "specific quick win 2 with content format and timing", "specific quick win 3 with measurable expected outcome"]
 }}
 
-Use real numbers from the data. Be specific and actionable.
+Use real numbers from the data. Every recommendation must be traceable to a data point.
 Only return valid JSON, no markdown."""
 
         ai_data = _call_openrouter(prompt)
@@ -760,37 +798,57 @@ def ai_content_preferences():
         data = _gather_analytics_data()
         data_summary = _build_data_summary(data)
 
-        prompt = f"""You are a social media content strategist. Analyze this audience data and provide content performance analysis and optimal posting times.
+        prompt = f"""You are a content performance analyst specializing in social media engagement optimization. Analyze this audience data to determine which content types perform best and when each persona is most active.
 
 DATA:
 {data_summary}
+
+ANALYSIS METHODOLOGY:
+
+1. CONTENT TYPE RANKING: Evaluate which content formats would generate the highest engagement given the persona and platform mix. Consider:
+   - Professional personas → value educational, data-driven content
+   - Creative personas → engage with storytelling, visual content
+   - Technical personas → prefer tutorials, deep dives, case studies
+   - General audience → responds to tips, motivation, trending topics
+
+2. TIMING OPTIMIZATION: Map each persona to their peak engagement window based on:
+   - Industry norms (tech workers = early morning/lunch, marketers = mid-morning, executives = before 9 AM)
+   - Platform patterns (LinkedIn peaks Tuesday-Thursday, Twitter is real-time, Medium is weekend reading)
+   - Location-based time zones
+
+3. PERFORMANCE METRICS: Estimate engagement rates based on content-persona fit. Higher fit = higher engagement.
+
+QUALITY RULES:
+- Content types must be specific formats, not vague categories (e.g., "Step-by-Step Tutorial Threads" not just "Educational")
+- Engagement percentages should be realistic (2-15% range for organic social)
+- Performance boosts must be comparative and data-referenced
+- Each persona gets exactly ONE optimal posting time
 
 Respond in strict JSON with this format:
 {{
   "content_types": [
     {{
-      "title": "content type name (e.g. Tutorial & How-to Posts)",
-      "engagement": "engagement rate as string like 8.4%",
-      "percentage": number from 0-100 for progress bar width,
+      "title": "specific content format name (e.g. Tutorial & How-to Threads, Data-Driven Carousels, Behind-the-Scenes Stories)",
+      "engagement": "estimated engagement rate as string like 8.4%",
+      "percentage": number from 0-100 for progress bar width (highest ranked = 85-95),
       "gradient": "tailwind gradient classes like from-cyan-400 to-violet-400",
-      "description": "which personas love this content type"
+      "description": "which personas love this and WHY — reference specific data"
     }}
   ],
   "posting_times": [
     {{
-      "icon": "fontawesome icon (fa-rocket, fa-graduation-cap, fa-feather, fa-chart-line, fa-briefcase, fa-users)",
-      "persona": "persona name",
-      "time": "best day and time like Tuesday, 2:00 PM",
+      "icon": "fontawesome icon (fa-rocket, fa-graduation-cap, fa-feather, fa-chart-line, fa-briefcase, fa-users, fa-code, fa-lightbulb)",
+      "persona": "persona name from data",
+      "time": "optimal day and time (e.g. Tuesday, 2:00 PM)",
       "color": "cyan or violet or teal or yellow",
-      "performance": "performance boost like +73% above average"
+      "performance": "performance boost vs average (e.g. +73% above average) — based on persona-timing fit"
     }}
   ]
 }}
 
 Generate exactly 4 content types ranked by engagement (highest first).
 Generate one posting time entry for each persona in the data.
-Use gradient values from these options: "from-cyan-400 to-violet-400", "from-violet-400 to-teal-400", "from-teal-400 to-yellow-400", "from-yellow-400 to-orange-400".
-Base the analysis on the persona and platform distributions provided.
+Use gradient values from: "from-cyan-400 to-violet-400", "from-violet-400 to-teal-400", "from-teal-400 to-yellow-400", "from-yellow-400 to-orange-400".
 Only return valid JSON, no markdown."""
 
         ai_data = _call_openrouter(prompt)
@@ -832,24 +890,32 @@ def _detect_content_types_batch(posts_batch):
             "content": (p.get("content") or "")[:500]
         })
 
-    prompt = f"""You are a content classifier. Classify each post into exactly ONE content type.
+    prompt = f"""You are a precision content classifier. Analyze each post's writing style, structure, intent, and vocabulary to determine its exact content type.
 
 Allowed types: {json.dumps(CONTENT_TYPES)}
 
 Posts to classify:
 {json.dumps(posts_for_prompt, ensure_ascii=False)}
 
-Rules:
-- "tutorial": step-by-step how-to or educational walkthrough
-- "story": personal narrative, anecdote, or storytelling
-- "insight": key observation, lesson learned, or reflection
-- "case_study": real-world example with results/data
-- "motivational": inspirational, encouraging, or mindset-focused
-- "short_tip": quick actionable advice (1-3 sentences)
-- "news": industry news, updates, announcements
-- "opinion": personal stance, hot take, or debate
-- "deep_dive": in-depth exploration of a topic
-- "analysis": data-driven breakdown or comparison
+CLASSIFICATION SIGNAL PATTERNS:
+
+"tutorial" → Step-by-step instructions, numbered lists, "how to", "here's how", teaching language, actionable steps
+"story" → Personal narrative with timeline ("I was...", "When I..."), anecdotes, character arc, emotional journey
+"insight" → Key observation, reflective tone ("I realized...", "The truth is...", "What most people miss...")
+"case_study" → Real-world example with specific results, metrics, before/after, company/client references
+"motivational" → Inspirational language, empowerment, "you can", "believe", "don't give up", mindset-focused
+"short_tip" → Quick actionable advice in 1-3 sentences, "Pro tip:", one specific recommendation
+"news" → Industry updates, announcements, "just launched", time-sensitive, recent events
+"opinion" → Personal stance, "I think", "Hot take:", debate-starting, "Unpopular opinion:"
+"deep_dive" → In-depth exploration with multiple sections, comprehensive coverage, 500+ words
+"analysis" → Data-driven breakdown, statistics, trends, "the data shows", metrics-heavy comparison
+
+DECISION RULES:
+- If it teaches AND tells a story → choose PRIMARY intent
+- Short advice (1-3 lines) → "short_tip" regardless of other elements
+- Data/metrics as core → "analysis" over "case_study" (case_study needs narrative arc)
+- Reflective vs argumentative → "insight" if reflective, "opinion" if argumentative
+- Confidence: 0.9+ only when signals are unambiguous, 0.7-0.89 for clear but mixed, 0.5-0.69 for ambiguous
 
 Respond in strict JSON:
 {{
