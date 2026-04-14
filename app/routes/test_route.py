@@ -1,4 +1,4 @@
-from flask import Blueprint, current_app, jsonify
+from flask import Blueprint, current_app, jsonify, request
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from datetime import datetime, timedelta
 from collections import defaultdict
@@ -1980,6 +1980,487 @@ Only return valid JSON, no markdown."""
         "total_posts": len(posts),
         "ai_insight": ai_insight
     })
+
+
+# ──────────────────────────────────────────
+# ROUTE : REPUTATION SCORE
+# Analyses posts + interactions to compute
+# a /100 reputation score with 4 criteria,
+# post evolution, & personalised advice.
+# ──────────────────────────────────────────
+@test_bp.route("/reputation-score")
+@jwt_required(optional=True)
+def reputation_score():
+  try:
+    current_user_id = get_jwt_identity()
+    now = datetime.utcnow()
+
+    # ── Fetch posts ──
+    if current_user_id:
+        posts = list(current_app.mongo.posts.find({"user_id": current_user_id}))
+    else:
+        posts = list(current_app.mongo.posts.find())
+
+    if not posts:
+        return jsonify({
+            "score": 0,
+            "sub_scores": {"consistency": 0, "engagement": 0, "clarity": 0, "growth": 0},
+            "tier": {"name": "Bronze", "range": "0-40"},
+            "evolution": [],
+            "post_details": [],
+            "advice": [],
+            "total_posts": 0,
+            "total_interactions": 0
+        })
+
+    user_post_ids = [str(p["_id"]) for p in posts]
+
+    # ── Auto-generate interactions for posts without any ──
+    for post in posts:
+        pid = str(post["_id"])
+        sd = parse_schedule_date(post.get("schedule_date"))
+        if sd is None or sd > now:
+            continue
+        if current_app.mongo.interactions.count_documents({"post_id": pid}) == 0:
+            gen = _generate_for_post(pid, sd, now, post.get("content_type", "unclassified"))
+            current_app.mongo.interactions.insert_many(gen)
+
+    interactions = list(current_app.mongo.interactions.find({"post_id": {"$in": user_post_ids}}))
+
+    # ── Group interactions by post ──
+    inter_by_post = defaultdict(list)
+    for i in interactions:
+        inter_by_post[i["post_id"]].append(i)
+
+    total_interactions = len(interactions)
+    total_posts = len(posts)
+
+    # ══════════════════════════════════════
+    # 1. CONSISTENCY (regularity of posting)
+    # ══════════════════════════════════════
+    def _safe_date(p):
+        """Return a datetime for a post, or now as fallback."""
+        d = parse_schedule_date(p.get("schedule_date"))
+        if isinstance(d, datetime):
+            return d
+        ca = p.get("created_at")
+        if isinstance(ca, datetime):
+            return ca
+        if isinstance(ca, str):
+            try:
+                return datetime.fromisoformat(ca.replace('Z', ''))
+            except (ValueError, TypeError):
+                pass
+        return now
+
+    post_dates = [_safe_date(p) for p in posts]
+    post_dates.sort()
+
+    if len(post_dates) >= 2:
+        gaps = [(post_dates[i+1] - post_dates[i]).days for i in range(len(post_dates)-1)]
+        avg_gap = sum(gaps) / len(gaps)
+        std_gap = (sum((g - avg_gap)**2 for g in gaps) / len(gaps)) ** 0.5
+        # Lower std = more consistent.  Score = 100 if std<=1, drops toward 0 for std>=14
+        consistency = max(0, min(100, round(100 - (std_gap / 14) * 100)))
+        # Bonus for high frequency
+        if avg_gap <= 2:
+            consistency = min(100, consistency + 15)
+        elif avg_gap <= 4:
+            consistency = min(100, consistency + 8)
+    elif len(post_dates) == 1:
+        consistency = 30
+    else:
+        consistency = 0
+
+    # ══════════════════════════════════════
+    # 2. ENGAGEMENT (likes, comments, shares per post)
+    # ══════════════════════════════════════
+    post_engagement_rates = []
+    for p in posts:
+        pid = str(p["_id"])
+        inters = inter_by_post.get(pid, [])
+        likes    = sum(1 for x in inters if x.get("type") == "like")
+        comments = sum(1 for x in inters if x.get("type") == "comment")
+        shares   = sum(1 for x in inters if x.get("type") == "share")
+        # Weighted score: likes=1, comments=2, shares=3
+        weighted = likes + comments * 2 + shares * 3
+        post_engagement_rates.append(weighted)
+
+    avg_engagement = sum(post_engagement_rates) / max(len(post_engagement_rates), 1)
+    # Normalize: 200+ weighted interactions/post = 100
+    engagement = min(100, round((avg_engagement / 200) * 100))
+
+    # ══════════════════════════════════════
+    # 3. CLARITY (content quality indicators)
+    # ══════════════════════════════════════
+    clarity_scores = []
+    for p in posts:
+        content = (p.get("content") or "")
+        score = 0
+        # Length bonus (200+ chars = max 30pts)
+        score += min(30, len(content) / 7)
+        # Hashtags (up to 20pts)
+        hashtag_count = content.count("#")
+        score += min(20, hashtag_count * 5)
+        # Structure (line breaks = lists/paragraphs → up to 15pts)
+        line_count = content.count("\n")
+        score += min(15, line_count * 3)
+        # Emojis bonus (up to 10pts)
+        emoji_count = len(re.findall(r'[\U0001F600-\U0001F64F\U0001F300-\U0001F5FF\U0001F680-\U0001F6FF\U0001F1E0-\U0001F1FF]', content))
+        score += min(10, emoji_count * 3)
+        # Content type detected? +10
+        if p.get("content_type") and p.get("content_type") != "unclassified":
+            score += 10
+        # High confidence detection? +5
+        if (p.get("content_type_confidence") or 0) >= 0.8:
+            score += 5
+        # CTA / question? +10
+        if "?" in content or any(kw in content.lower() for kw in ["comment", "share", "thoughts", "agree", "avis"]):
+            score += 10
+        clarity_scores.append(min(100, round(score)))
+
+    clarity = round(sum(clarity_scores) / max(len(clarity_scores), 1))
+
+    # ══════════════════════════════════════
+    # 4. GROWTH (improvement trend over time)
+    # ══════════════════════════════════════
+    # Split posts chronologically into first-half / second-half and compare engagement
+    sorted_posts = sorted(posts, key=_safe_date)
+    mid = max(1, len(sorted_posts) // 2)
+    first_half_ids  = {str(p["_id"]) for p in sorted_posts[:mid]}
+    second_half_ids = {str(p["_id"]) for p in sorted_posts[mid:]}
+
+    def _half_engagement(ids_set):
+        total = 0
+        for pid in ids_set:
+            inters = inter_by_post.get(pid, [])
+            total += sum(1 for x in inters if x.get("type") == "like") + \
+                     sum(2 for x in inters if x.get("type") == "comment") + \
+                     sum(3 for x in inters if x.get("type") == "share")
+        return total / max(len(ids_set), 1)
+
+    first_eng  = _half_engagement(first_half_ids)
+    second_eng = _half_engagement(second_half_ids)
+
+    if first_eng > 0:
+        growth_ratio = (second_eng - first_eng) / first_eng
+        growth = min(100, max(0, round(50 + growth_ratio * 50)))
+    else:
+        growth = 50 if second_eng > 0 else 0
+
+    # ══════════════════════════════════════
+    # OVERALL SCORE  (weighted average)
+    # ══════════════════════════════════════
+    overall = round(
+        consistency * 0.25 +
+        engagement  * 0.35 +
+        clarity     * 0.20 +
+        growth      * 0.20
+    )
+
+    # Tier
+    if overall >= 91:
+        tier = {"name": "Platinum", "range": "91-100"}
+    elif overall >= 71:
+        tier = {"name": "Gold", "range": "71-90"}
+    elif overall >= 41:
+        tier = {"name": "Silver", "range": "41-70"}
+    else:
+        tier = {"name": "Bronze", "range": "0-40"}
+
+    # ══════════════════════════════════════
+    # POST EVOLUTION (per-post timeline)
+    # ══════════════════════════════════════
+    evolution = []
+    for p in sorted_posts:
+        pid = str(p["_id"])
+        inters = inter_by_post.get(pid, [])
+        likes    = sum(1 for x in inters if x.get("type") == "like")
+        comments = sum(1 for x in inters if x.get("type") == "comment")
+        shares   = sum(1 for x in inters if x.get("type") == "share")
+        weighted = likes + comments * 2 + shares * 3
+
+        sd = _safe_date(p)
+        label = sd.strftime("%d %b")
+
+        evolution.append({
+            "date": label,
+            "likes": likes,
+            "comments": comments,
+            "shares": shares,
+            "total": len(inters),
+            "score": min(100, round((weighted / 200) * 100)),
+            "content_preview": (p.get("content") or "")[:60],
+            "content_type": p.get("content_type", "unclassified")
+        })
+
+    # ══════════════════════════════════════
+    # POST DETAILS (best & worst)
+    # ══════════════════════════════════════
+    post_details = []
+    for p in posts:
+        pid = str(p["_id"])
+        inters = inter_by_post.get(pid, [])
+        likes    = sum(1 for x in inters if x.get("type") == "like")
+        comments = sum(1 for x in inters if x.get("type") == "comment")
+        shares   = sum(1 for x in inters if x.get("type") == "share")
+        post_details.append({
+            "post_id": pid,
+            "content_preview": (p.get("content") or "")[:80],
+            "content_type": p.get("content_type", "unclassified"),
+            "likes": likes,
+            "comments": comments,
+            "shares": shares,
+            "total": len(inters),
+            "weighted": likes + comments * 2 + shares * 3
+        })
+    post_details.sort(key=lambda x: x["weighted"], reverse=True)
+
+    # ══════════════════════════════════════
+    # PERSONALISED ADVICE (AI-generated)
+    # ══════════════════════════════════════
+    posts_without_hashtags = sum(1 for p in posts if "#" not in (p.get("content") or ""))
+    posts_without_cta = sum(1 for p in posts if "?" not in (p.get("content") or ""))
+
+    scores_summary = (
+        f"Overall reputation score: {overall}/100\n"
+        f"Consistency score: {consistency}/100 (posting regularity)\n"
+        f"Engagement score: {engagement}/100 (avg {round(avg_engagement)} weighted interactions/post)\n"
+        f"Clarity score: {clarity}/100 (content quality)\n"
+        f"Growth score: {growth}/100 ({'improving' if second_eng > first_eng else 'declining or stable'} trend)\n\n"
+        f"Total posts: {total_posts}\n"
+        f"Total interactions: {total_interactions}\n"
+        f"Posts without hashtags: {posts_without_hashtags}\n"
+        f"Posts without CTA/question: {posts_without_cta}\n"
+        f"Best post type: {post_details[0]['content_type'] if post_details else 'N/A'} "
+        f"({post_details[0]['weighted'] if post_details else 0} weighted interactions)\n"
+        f"Tier: {tier['name']} ({tier['range']})"
+    )
+
+    ai_prompt = f"""You are an expert social media coach. Analyze this reputation data and give personalized, actionable advice in English.
+
+DATA:
+{scores_summary}
+
+Respond in strict JSON with this format:
+{{
+  "advice": [
+    {{
+      "criterion": "consistency or engagement or clarity or growth",
+      "icon": "fontawesome icon (fa-calendar-check, fa-heart, fa-brain, fa-rocket, fa-star, fa-lightbulb, fa-fire, fa-chart-line)",
+      "color": "cyan or violet or teal or green or yellow",
+      "title": "Short actionable title (max 8 words)",
+      "description": "1-2 sentence specific recommendation using the actual numbers from the data",
+      "impact": "potential points like +15 pts potential"
+    }}
+  ]
+}}
+
+Rules:
+- Generate exactly 4 advice items, one for each criterion (consistency, engagement, clarity, growth)
+- Use criterion colors: consistency=cyan, engagement=violet, clarity=teal, growth=green
+- Use criterion icons: consistency=fa-calendar-check, engagement=fa-heart, clarity=fa-brain, growth=fa-rocket
+- If a score is already high (80+), give advice to maintain or push to the next level
+- Reference specific numbers from the data (e.g. "Your 12 posts without hashtags...")
+- Be encouraging but specific — avoid generic advice
+- All content must be in English
+Only return valid JSON, no markdown."""
+
+    try:
+        ai_data = _call_openrouter(
+            ai_prompt,
+            system_msg="You are a social media reputation coach. Return strict JSON only."
+        )
+        advice = ai_data.get("advice", [])
+    except Exception as ai_err:
+        print(f"[REPUTATION-SCORE] AI advice error: {ai_err}")
+        # Fallback to static English advice
+        advice = []
+        if consistency < 60:
+            advice.append({
+                "criterion": "consistency",
+                "icon": "fa-calendar-check",
+                "color": "cyan",
+                "title": "Post more consistently",
+                "description": f"Your posting gaps are irregular. Aim for 2-3 posts/week to stabilize your presence.",
+                "impact": f"+{min(20, 60 - consistency)} pts potential"
+            })
+        elif consistency < 80:
+            advice.append({
+                "criterion": "consistency",
+                "icon": "fa-calendar-check",
+                "color": "cyan",
+                "title": "Keep your posting rhythm",
+                "description": "Good regularity! Schedule posts ahead to never miss a slot.",
+                "impact": f"+{min(10, 80 - consistency)} pts potential"
+            })
+        if engagement < 50:
+            advice.append({
+                "criterion": "engagement",
+                "icon": "fa-heart",
+                "color": "violet",
+                "title": "Boost your interactions",
+                "description": f"Average of {round(avg_engagement)} weighted interactions/post. Add questions and CTAs to engage your audience.",
+                "impact": f"+{min(25, 50 - engagement)} pts potential"
+            })
+        elif engagement < 75:
+            advice.append({
+                "criterion": "engagement",
+                "icon": "fa-heart",
+                "color": "violet",
+                "title": "Replicate your best posts",
+                "description": f"Your top post ({post_details[0]['content_type'] if post_details else 'N/A'}) got {post_details[0]['weighted'] if post_details else 0} interactions. Create more like it.",
+                "impact": f"+{min(15, 75 - engagement)} pts potential"
+            })
+        if clarity < 60:
+            advice.append({
+                "criterion": "clarity",
+                "icon": "fa-brain",
+                "color": "teal",
+                "title": "Improve your content structure",
+                "description": f"{posts_without_hashtags} posts without hashtags, {posts_without_cta} without CTA. Add lists, emojis and calls to action.",
+                "impact": f"+{min(20, 60 - clarity)} pts potential"
+            })
+        if growth < 60:
+            advice.append({
+                "criterion": "growth",
+                "icon": "fa-rocket",
+                "color": "green",
+                "title": "Reignite your growth",
+                "description": "Your recent posts are trending down. Try a new format (story, tutorial, opinion).",
+                "impact": f"+{min(20, 60 - growth)} pts potential"
+            })
+        if not advice:
+            advice.append({
+                "criterion": "general",
+                "icon": "fa-star",
+                "color": "yellow",
+                "title": "Excellent performance!",
+                "description": "You're in the top tier. To reach Platinum, diversify your formats and slightly increase frequency.",
+                "impact": "Maintain"
+            })
+
+    return jsonify({
+        "score": overall,
+        "sub_scores": {
+            "consistency": consistency,
+            "engagement": engagement,
+            "clarity": clarity,
+            "growth": growth
+        },
+        "tier": tier,
+        "evolution": evolution,
+        "post_details": post_details[:10],
+        "advice": advice,
+        "total_posts": total_posts,
+        "total_interactions": total_interactions,
+        "avg_engagement_weighted": round(avg_engagement, 1)
+    })
+
+  except Exception as e:
+    print(f"[REPUTATION-SCORE] Error: {e}")
+    import traceback; traceback.print_exc()
+    return jsonify({"error": str(e)}), 500
+
+
+# ──────────────────────────────────────────
+# ROUTE : GENERATE OPTIMIZED POST
+# Takes AI insights/tips and generates
+# a ready-to-publish post using OpenRouter
+# ──────────────────────────────────────────
+@test_bp.route("/generate-optimized-post", methods=["POST"])
+@jwt_required(optional=True)
+def generate_optimized_post():
+    try:
+        data = request.get_json() or {}
+        tips = data.get("tips", [])
+        score = data.get("score", 0)
+        tier = data.get("tier", "Bronze")
+        best_post_type = data.get("best_post_type", "insight")
+
+        if not tips:
+            return jsonify({"success": False, "error": "No tips provided"}), 400
+
+        tips_text = "\n".join(f"- {t.get('title','')}: {t.get('description','')}" for t in tips)
+
+        # Get user's recent posts for style reference
+        current_user_id = get_jwt_identity()
+        sample_posts = []
+        if current_user_id:
+            recent = list(current_app.mongo.posts.find({"user_id": current_user_id}).sort("created_at", -1).limit(3))
+        else:
+            recent = list(current_app.mongo.posts.find().sort("created_at", -1).limit(3))
+        for p in recent:
+            c = (p.get("content") or "")[:200]
+            if c:
+                sample_posts.append(c)
+
+        style_ref = ""
+        if sample_posts:
+            style_ref = "\n\nHere are the user's recent posts for style reference:\n" + "\n---\n".join(sample_posts)
+
+        prompt = f"""You are an expert social media content writer. Generate a single ready-to-publish social media post that follows ALL the optimization tips below.
+
+OPTIMIZATION TIPS:
+{tips_text}
+
+CONTEXT:
+- User's current reputation score: {score}/100 ({tier} tier)
+- Best performing content type: {best_post_type}
+{style_ref}
+
+RULES:
+- Write exactly ONE post, ready to publish
+- Apply every tip (hashtags, CTA, structure, emojis, etc.)
+- Match the user's writing style if reference posts are provided
+- Use the best performing content type ({best_post_type}) as format
+- Include 2-3 relevant hashtags
+- End with an engaging question or call-to-action
+- Keep it between 100-280 characters for Twitter compatibility, or up to 600 for LinkedIn
+- Do NOT add any explanation, just the post content
+
+Respond with ONLY the post text, no quotes, no labels, no markdown."""
+
+        api_key = current_app.config.get('OPENROUTER_API_KEY')
+        if not api_key:
+            raise ValueError("OPENROUTER_API_KEY is not configured")
+
+        response = http_requests.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "HTTP-Referer": current_app.config.get("FRONTEND_URL", "http://localhost:5173"),
+                "X-Title": "AutoPoster Optimize"
+            },
+            json={
+                "model": current_app.config.get("OPENROUTER_MODEL", "openai/gpt-4o-mini"),
+                "messages": [
+                    {"role": "system", "content": "You are a social media content writer. Write only the post content, nothing else."},
+                    {"role": "user", "content": prompt}
+                ],
+                "temperature": 0.8,
+                "max_tokens": 512
+            },
+            timeout=30
+        )
+
+        result = response.json()
+        if "error" in result:
+            raise ValueError(str(result["error"]))
+        if "choices" not in result or not result["choices"]:
+            raise ValueError("No response from AI")
+
+        post_content = result["choices"][0]["message"]["content"].strip()
+        # Remove wrapping quotes if any
+        if post_content.startswith('"') and post_content.endswith('"'):
+            post_content = post_content[1:-1]
+
+        return jsonify({"success": True, "content": post_content})
+
+    except Exception as e:
+        print(f"[GENERATE-OPTIMIZED] Error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 # -------------------------------
