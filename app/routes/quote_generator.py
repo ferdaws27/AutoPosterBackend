@@ -17,7 +17,7 @@ def normalize_platform_name(platform: str) -> str:
     return mapping.get(platform.lower(), platform.capitalize())
 
 
-def build_prompt(quote: str, selected_platforms: list, brand_enabled: bool, voice_profile: dict = None) -> str:
+def build_prompt(quote: str, selected_platforms: list, brand_enabled: bool, voice_profile: dict = None, style_preset: str = None) -> str:
     platforms = [normalize_platform_name(p) for p in selected_platforms]
 
     voice_context = ""
@@ -35,7 +35,20 @@ def build_prompt(quote: str, selected_platforms: list, brand_enabled: bool, voic
 - Unique Traits: {', '.join(voice_profile.get('uniqueTraits', []))}
 Adapt all variations to match this voice profile while staying platform-native."""
 
-    return f"""You are a world-class social media copywriter with 10+ years of experience crafting viral content for Fortune 500 brands. You transform quotes into scroll-stopping, platform-native posts that drive engagement.{voice_context}
+    style_context = ""
+    if style_preset:
+        style_map = {
+            "motivational": "Write in an uplifting, inspiring, high-energy style. Use power words, exclamation marks, and emotional impact. Make the reader feel empowered.",
+            "professional": "Write in a polished, authoritative, corporate-ready style. Use data-driven language, measured tone, and credibility signals. Suitable for executives.",
+            "humorous": "Write with wit, clever wordplay, and unexpected twists. Use humor to make the point memorable. Keep it smart, not silly.",
+            "poetic": "Write with lyrical, evocative language. Use metaphors, rhythm, and imagery. Create an emotional, almost literary experience.",
+            "provocative": "Write with a bold, contrarian, challenge-the-status-quo style. Push boundaries, ask uncomfortable questions, and make people think.",
+        }
+        instruction = style_map.get(style_preset, "")
+        if instruction:
+            style_context = f"\n\nSTYLE PRESET — {style_preset.upper()}:\n{instruction}"
+
+    return f"""You are a world-class social media copywriter with 10+ years of experience crafting viral content for Fortune 500 brands. You transform quotes into scroll-stopping, platform-native posts that drive engagement.{voice_context}{style_context}
 
 CRITICAL LANGUAGE RULE:
 Detect the language of the original quote below. Write ALL variations in THAT SAME LANGUAGE.
@@ -183,6 +196,7 @@ def generate_quotes():
         selected_platforms = data.get("selectedPlatforms", [])
         brand_enabled = data.get("brandEnabled", False)
         voice_profile = data.get("voiceProfile")
+        style_preset = data.get("stylePreset")
 
         if not quote:
             return jsonify({"error": "Le champ quote est obligatoire"}), 400
@@ -193,7 +207,7 @@ def generate_quotes():
         if not selected_platforms or not isinstance(selected_platforms, list):
             return jsonify({"error": "Au moins une plateforme est requise"}), 400
 
-        prompt = build_prompt(quote, selected_platforms, brand_enabled, voice_profile)
+        prompt = build_prompt(quote, selected_platforms, brand_enabled, voice_profile, style_preset)
         ai_response = call_openrouter(prompt)
 
         content = ai_response["choices"][0]["message"]["content"]
@@ -293,3 +307,112 @@ def delete_quote_history(quote_id):
             "error": "Impossible de supprimer l'élément",
             "details": str(e)
         }), 500
+
+
+@quote_generator_bp.route("/templates", methods=["POST"])
+def save_template():
+    """Save a quote variation as a reusable template."""
+    try:
+        data = request.get_json() or {}
+        quote = data.get("quote", "").strip()
+        variation = data.get("variation")
+        name = data.get("name", "").strip()
+
+        if not quote or not variation:
+            return jsonify({"error": "quote and variation are required"}), 400
+
+        doc = {
+            "name": name or quote[:50],
+            "quote": quote,
+            "variation": variation,
+            "createdAt": datetime.utcnow(),
+        }
+        result = current_app.mongo.quote_templates.insert_one(doc)
+        return jsonify({"success": True, "id": str(result.inserted_id)}), 201
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@quote_generator_bp.route("/templates", methods=["GET"])
+def get_templates():
+    """Get saved quote templates."""
+    try:
+        items = list(
+            current_app.mongo.quote_templates
+            .find()
+            .sort("createdAt", -1)
+            .limit(50)
+        )
+        templates = []
+        for item in items:
+            templates.append({
+                "id": str(item["_id"]),
+                "name": item.get("name", ""),
+                "quote": item.get("quote", ""),
+                "variation": item.get("variation", {}),
+                "createdAt": item["createdAt"].isoformat() if item.get("createdAt") else None,
+            })
+        return jsonify({"success": True, "templates": templates}), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@quote_generator_bp.route("/templates/<template_id>", methods=["DELETE"])
+def delete_template(template_id):
+    """Delete a saved template."""
+    try:
+        from bson import ObjectId
+        result = current_app.mongo.quote_templates.delete_one({"_id": ObjectId(template_id)})
+        if result.deleted_count == 0:
+            return jsonify({"error": "Template not found"}), 404
+        return jsonify({"success": True}), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@quote_generator_bp.route("/analytics", methods=["GET"])
+def get_analytics():
+    """Get quote generation analytics."""
+    try:
+        total = current_app.mongo.quote_generations.count_documents({})
+        templates_count = current_app.mongo.quote_templates.count_documents({})
+
+        # Platform breakdown (only Twitter, LinkedIn, Medium)
+        allowed_platforms = ["twitter", "linkedin", "medium"]
+        pipeline = [
+            {"$unwind": "$selectedPlatforms"},
+            {"$match": {"selectedPlatforms": {"$in": allowed_platforms}}},
+            {"$group": {"_id": "$selectedPlatforms", "count": {"$sum": 1}}},
+            {"$sort": {"count": -1}},
+        ]
+        platform_stats = list(current_app.mongo.quote_generations.aggregate(pipeline))
+
+        # Recent activity (last 7 days)
+        from datetime import timedelta
+        week_ago = datetime.utcnow() - timedelta(days=7)
+        recent_count = current_app.mongo.quote_generations.count_documents(
+            {"createdAt": {"$gte": week_ago}}
+        )
+
+        # Average variations per gen
+        var_pipeline = [
+            {"$project": {"varCount": {"$size": {"$ifNull": ["$variations", []]}}}},
+            {"$group": {"_id": None, "avg": {"$avg": "$varCount"}}},
+        ]
+        var_result = list(current_app.mongo.quote_generations.aggregate(var_pipeline))
+        avg_variations = round(var_result[0]["avg"], 1) if var_result else 0
+
+        return jsonify({
+            "success": True,
+            "total_generations": total,
+            "saved_templates": templates_count,
+            "this_week": recent_count,
+            "avg_variations": avg_variations,
+            "platforms": {s["_id"]: s["count"] for s in platform_stats if s["_id"] in allowed_platforms},
+        }), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500

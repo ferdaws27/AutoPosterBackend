@@ -105,6 +105,8 @@ def call_openrouter(topic, platforms, language="fr", tone="dynamic", count=5):
         timeout=60
     )
 
+    if response.status_code == 402:
+        raise ValueError("OpenRouter credits exhausted. Please recharge at https://openrouter.ai/settings/credits")
     if response.status_code != 200:
         raise ValueError(f"OpenRouter error: {response.text}")
 

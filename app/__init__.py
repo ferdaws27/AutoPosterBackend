@@ -144,7 +144,7 @@ def create_app():
     from .routes.ai_ideas import ai_ideas_bp
     from .routes.ai_generate import ai_generate_bp
     from .routes.clone import clone_bp
-    
+    from .routes.ab_tests import ab_tests_bp
 
     # Register all blueprints in organized manner
     app.register_blueprint(oauth_linkedin_bp)
@@ -165,7 +165,7 @@ def create_app():
     app.register_blueprint(ai_ideas_bp, url_prefix="/api/ai-ideas")
     app.register_blueprint(ai_generate_bp, url_prefix="/api/ai/generate")
     app.register_blueprint(clone_bp, url_prefix="/api/clone")
-    
+    app.register_blueprint(ab_tests_bp, url_prefix="/api/ab-tests")
 
     # Route health
     @app.get("/api/health")

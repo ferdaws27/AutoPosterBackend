@@ -672,6 +672,9 @@ Only return valid JSON, no markdown."""
             timeout=30
         )
 
+        if response.status_code == 402:
+            raise ValueError("OpenRouter credits exhausted. Please recharge at https://openrouter.ai/settings/credits")
+
         result = response.json()
 
         # Check for API-level errors
@@ -812,6 +815,10 @@ def _call_openrouter(prompt, system_msg="You are an audience analytics expert. R
         },
         timeout=30
     )
+
+    if response.status_code == 402:
+        raise ValueError("OpenRouter credits exhausted. Please recharge at https://openrouter.ai/settings/credits")
+
     result = response.json()
 
     if "error" in result:
@@ -2377,6 +2384,7 @@ def generate_optimized_post():
         score = data.get("score", 0)
         tier = data.get("tier", "Bronze")
         best_post_type = data.get("best_post_type", "insight")
+        voice_profile = data.get("voiceProfile")
 
         if not tips:
             return jsonify({"success": False, "error": "No tips provided"}), 400
@@ -2399,6 +2407,27 @@ def generate_optimized_post():
         if sample_posts:
             style_ref = "\n\nHere are the user's recent posts for style reference:\n" + "\n---\n".join(sample_posts)
 
+        voice_instruction = ""
+        if voice_profile and isinstance(voice_profile, dict):
+            voice_instruction = f"""
+
+VOICE PROFILE TO MATCH (replicate this writing style closely):
+- Voice: {voice_profile.get('name', '')}
+- Tone: {voice_profile.get('tone', '')}
+- Sentence Style: {voice_profile.get('sentenceStyle', '')}
+- Structure: {voice_profile.get('structure', '')}
+- Emoji Usage: {voice_profile.get('emojiUsage', '')}
+- Hashtag Usage: {voice_profile.get('hashtagUsage', '')}
+- Vocabulary Level: {voice_profile.get('vocabularyLevel', '')}
+- Hook Style: {voice_profile.get('hookStyle', '')}
+- CTA Style: {voice_profile.get('ctaStyle', '')}
+- Content Themes: {', '.join(voice_profile.get('contentThemes', []))}
+- Writing Patterns: {', '.join(voice_profile.get('writingPatterns', []))}
+- Unique Traits: {', '.join(voice_profile.get('uniqueTraits', []))}"""
+            sample = voice_profile.get('samplePost', '')
+            if sample:
+                voice_instruction += f"\n- Example of their writing: \"{sample}\""
+
         prompt = f"""You are an expert social media content writer. Generate a single ready-to-publish social media post that follows ALL the optimization tips below.
 
 OPTIMIZATION TIPS:
@@ -2408,11 +2437,13 @@ CONTEXT:
 - User's current reputation score: {score}/100 ({tier} tier)
 - Best performing content type: {best_post_type}
 {style_ref}
+{voice_instruction}
 
 RULES:
 - Write exactly ONE post, ready to publish
 - Apply every tip (hashtags, CTA, structure, emojis, etc.)
 - Match the user's writing style if reference posts are provided
+- If a voice profile is provided, replicate its tone, style and unique traits closely
 - Use the best performing content type ({best_post_type}) as format
 - Include 2-3 relevant hashtags
 - End with an engaging question or call-to-action

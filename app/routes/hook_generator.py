@@ -11,6 +11,11 @@ from flask import Blueprint, current_app, jsonify, request
 hook_generator_bp = Blueprint("hook_generator", __name__)
 
 
+class CreditError(Exception):
+    """Raised when OpenRouter credits are exhausted."""
+    pass
+
+
 PLATFORM_RULES = {
     "twitter": {
         "max_chars": 280,
@@ -305,6 +310,8 @@ def call_openrouter(topic, platforms, language="fr", tone="dynamic", count=5, te
         timeout=60
     )
 
+    if response.status_code == 402:
+        raise CreditError("OpenRouter credits exhausted. Please recharge at https://openrouter.ai/settings/credits")
     if response.status_code != 200:
         raise ValueError(f"Erreur OpenRouter: {response.text}")
 
@@ -394,6 +401,8 @@ def generate_hooks():
             "hooks": hooks
         }), 200
 
+    except CreditError as e:
+        return jsonify({"error": str(e)}), 402
     except Exception as e:
         current_app.logger.exception("Hook generation error")
         return jsonify({"error": str(e)}), 500
@@ -566,4 +575,133 @@ def get_favorites():
 
     except Exception as e:
         current_app.logger.exception("Get favorites error")
+        return jsonify({"error": str(e)}), 500
+
+
+@hook_generator_bp.route("/tips", methods=["POST"])
+def generate_tips():
+    """Generate AI-powered hook writing tips based on topic and context."""
+    try:
+        payload = request.get_json(force=True) or {}
+        topic = clean_text(payload.get("topic", ""), max_length=500)
+        language = clean_text(payload.get("language", "en"), max_length=20) or "en"
+        platforms = normalize_platforms(payload.get("platforms", ["twitter", "linkedin", "medium"]))
+        voice_profile = payload.get("voiceProfile")
+
+        if not language or language == "auto":
+            if topic:
+                language = detect_language(topic)
+            else:
+                language = "en"
+
+        lang_instruction = get_language_instructions(language)
+
+        voice_context = ""
+        if voice_profile and isinstance(voice_profile, dict):
+            vp_tone = voice_profile.get("tone", "")
+            vp_style = voice_profile.get("writingStyle", voice_profile.get("sentenceStyle", ""))
+            vp_hook = voice_profile.get("hookStyle", "")
+            if vp_tone or vp_style:
+                voice_context = f"""
+The user has a specific writing voice:
+- Tone: {vp_tone}
+- Style: {vp_style}
+- Hook Style: {vp_hook}
+Tailor the tips to complement and enhance their natural voice."""
+
+        topic_context = ""
+        if topic:
+            topic_context = f'\nThe user is currently working on hooks about: "{topic}"\nMake tips specific and actionable for this topic.'
+
+        prompt = f"""You are an expert social media copywriter and hook writing coach.
+
+Generate 6 unique, actionable hook writing tips that are specific, practical and insightful.
+{topic_context}{voice_context}
+
+LANGUAGE: {language} — {lang_instruction}
+Target platforms: {', '.join(platforms)}
+
+Each tip must have:
+- "icon": a FontAwesome icon class (e.g. "fa-lightbulb", "fa-bolt", "fa-brain", "fa-pen-fancy", "fa-bullseye", "fa-fire", "fa-chart-line", "fa-rocket", "fa-users", "fa-eye", "fa-magic-wand-sparkles", "fa-comment-dots")
+- "color": one of "cyan", "violet", "teal", "yellow", "red", "pink", "green", "amber", "blue"
+- "title": short title (3-6 words) in {language}
+- "description": actionable tip (1-2 sentences) in {language}
+
+RULES:
+- Tips must be SPECIFIC and ACTIONABLE, not generic advice
+- Each tip should teach a different technique
+- Include at least one tip about the psychological trigger behind hooks
+- Include at least one platform-specific tip
+- ALL text (title + description) MUST be in {language}
+- Do NOT repeat basic advice like "ask questions" or "use numbers" unless you add a unique angle
+
+Return ONLY valid JSON, no markdown, no code fences:
+{{
+  "tips": [
+    {{
+      "icon": "fa-lightbulb",
+      "color": "cyan",
+      "title": "...",
+      "description": "..."
+    }}
+  ]
+}}"""
+
+        api_key = current_app.config.get("OPENROUTER_API_KEY")
+        if not api_key:
+            raise ValueError("OPENROUTER_API_KEY missing")
+
+        response = requests.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "HTTP-Referer": current_app.config.get("FRONTEND_URL", "http://localhost:5173"),
+                "X-Title": "AutoPoster Hook Tips"
+            },
+            json={
+                "model": current_app.config.get("OPENROUTER_MODEL", "openai/gpt-4o-mini"),
+                "messages": [
+                    {"role": "system", "content": f"You are a hook writing coach. Return strict JSON only. ALL text in {language}."},
+                    {"role": "user", "content": prompt}
+                ],
+                "temperature": 0.9,
+                "max_tokens": 1200
+            },
+            timeout=30
+        )
+
+        if response.status_code == 402:
+            raise CreditError("OpenRouter credits exhausted. Please recharge at https://openrouter.ai/settings/credits")
+        if response.status_code != 200:
+            raise ValueError(f"OpenRouter error: {response.text}")
+
+        data = response.json()
+        content = data["choices"][0]["message"]["content"]
+        parsed = extract_json(content)
+        tips = parsed.get("tips", [])
+
+        if not isinstance(tips, list) or len(tips) == 0:
+            raise ValueError("No tips returned")
+
+        # Normalize tips
+        valid_colors = {"cyan", "violet", "teal", "yellow", "red", "pink", "green", "amber", "blue"}
+        normalized = []
+        for tip in tips[:6]:
+            color = tip.get("color", "cyan")
+            if color not in valid_colors:
+                color = "cyan"
+            normalized.append({
+                "icon": clean_text(tip.get("icon", "fa-lightbulb"), max_length=50),
+                "color": color,
+                "title": clean_text(tip.get("title", ""), max_length=100),
+                "description": clean_text(tip.get("description", ""), max_length=300),
+            })
+
+        return jsonify({"tips": normalized}), 200
+
+    except CreditError as e:
+        return jsonify({"error": str(e)}), 402
+    except Exception as e:
+        current_app.logger.exception("Generate tips error")
         return jsonify({"error": str(e)}), 500

@@ -45,6 +45,8 @@ def generate():
             timeout=60,
         )
 
+        if response.status_code == 402:
+            return jsonify({"success": False, "error": "OpenRouter credits exhausted. Please recharge at https://openrouter.ai/settings/credits"}), 402
         if response.status_code != 200:
             return jsonify({"success": False, "error": f"OpenRouter error: {response.status_code}"}), 502
 
