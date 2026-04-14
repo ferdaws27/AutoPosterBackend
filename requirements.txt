@@ -10,3 +10,7 @@ PyPDF2
 pydub
 SpeechRecognition
 gunicorn
+edge-tts
+moviepy
+Pillow
+imageio-ffmpeg

@@ -20,48 +20,81 @@ def normalize_platform_name(platform: str) -> str:
 def build_prompt(quote: str, selected_platforms: list, brand_enabled: bool) -> str:
     platforms = [normalize_platform_name(p) for p in selected_platforms]
 
-    return f"""
-You are an expert social media copywriter.
+    return f"""You are a world-class social media copywriter with 10+ years of experience crafting viral content for Fortune 500 brands. You transform quotes into scroll-stopping, platform-native posts that drive engagement.
 
-Your task is to transform one quote into multiple social-media-ready variations.
+CRITICAL LANGUAGE RULE:
+Detect the language of the original quote below. Write ALL variations in THAT SAME LANGUAGE.
+- French quote → French output
+- English quote → English output
+- Arabic quote → Arabic output
+- NEVER translate. NEVER switch languages. Match the quote's language exactly.
 
-Original quote:
+ORIGINAL QUOTE:
 "{quote}"
 
-Selected platforms:
-{", ".join(platforms)}
+TARGET PLATFORMS: {", ".join(platforms)}
 
-Instructions:
-- Generate exactly one variation for each selected platform
-- Preserve the original meaning
-- Adapt writing style to the platform
-- Twitter: concise, punchy, engaging
-- LinkedIn: professional, polished, insightful
-- Medium: reflective, editorial, deeper tone
-- Return ONLY valid JSON
-- No markdown
-- No explanation
-- Format:
+TRANSFORMATION METHODOLOGY:
 
+STEP 1 — DECODE THE QUOTE:
+- Identify the core insight, emotion, and implicit audience
+- Find the tension, contrast, or surprise inside the message
+- Determine if it's aspirational, contrarian, educational, or emotional
+
+STEP 2 — PLATFORM-NATIVE REWRITING:
+Each variation must feel like it was BORN on that platform, not adapted to it.
+
+TWITTER (max 280 chars):
+- Lead with the most powerful phrase — first 5 words decide everything
+- Use rhythm: short sentence. Shorter sentence. Punch.
+- Line breaks create visual breathing room and dramatic pacing
+- If the quote has a contrast, use "X. But Y." structure
+- End with a mic-drop line, not a generic CTA
+- Hashtags: 1-2 max, only if they add genuine discovery value
+
+LINKEDIN:
+- Open with a bold, standalone first line (this is the "see more" preview — it MUST hook)
+- Add 1-2 sentences of personal context or a "why this matters" bridge BEFORE the quote
+- Use strategic line breaks — every 1-2 sentences
+- Frame as a leadership insight or hard-won lesson, never a motivational poster
+- End with a reflective question that invites genuine discussion (not "Agree?")
+- Hashtags: 2-3 industry-relevant tags at the end
+
+MEDIUM:
+- Adopt an editorial, essay-like voice — think published columnist
+- Open with a scene, anecdote, or provocative question that leads INTO the quote
+- Expand the thought: add a "what this really means" layer
+- Use a rhetorical question or future-looking statement to close
+- No hashtags — this is long-form territory
+
+STEP 3 — QUALITY GATES (every variation must pass ALL):
+✓ Would a real human post this? (no corporate-speak, no AI-sounding filler)
+✓ Does it stop the scroll? (first line must create curiosity or emotion)
+✓ Is the original meaning preserved and amplified, not diluted?
+✓ Does it match the platform's native voice and culture?
+✓ Would someone save, share, or screenshot this?
+
+ANTI-PATTERNS — INSTANT REJECTION:
+✗ Starting with "In today's fast-paced world..." or any generic opener
+✗ Starting every variation with the same word or structure
+✗ Watering down a bold statement to sound "safer"
+✗ Adding hollow calls-to-action ("Like if you agree!", "Tag a friend!")
+✗ Using buzzwords without substance ("game-changer", "paradigm shift")
+✗ Making the quote longer without making it better
+✗ Losing the emotional core of the original message
+✗ Writing in a DIFFERENT language than the original quote — this is an instant fail
+
+Brand signature enabled: {str(brand_enabled).lower()}
+If brand signature is enabled, append exactly: — @EtkanAI
+
+Return ONLY valid JSON, no markdown, no explanation:
 [
   {{
     "platform": "Twitter",
-    "tone": "motivational",
-    "text": "Generated text here"
-  }},
-  {{
-    "platform": "LinkedIn",
-    "tone": "professional",
+    "tone": "the dominant emotion (e.g. bold, reflective, urgent, hopeful, defiant, vulnerable)",
     "text": "Generated text here"
   }}
 ]
-
-Brand signature enabled: {str(brand_enabled).lower()}
-
-If brand signature is enabled, append exactly:
-— @EtkanAI
-
-Do not include hashtags unless genuinely useful.
 """
 
 
@@ -88,14 +121,15 @@ def call_openrouter(prompt: str):
         "messages": [
             {
                 "role": "system",
-                "content": "You generate structured JSON social media quote variations."
+                "content": "You are a world-class social media copywriter. You transform quotes into platform-native, scroll-stopping content. Return ONLY valid JSON arrays — no markdown, no explanation, no code fences."
             },
             {
                 "role": "user",
                 "content": prompt
             }
         ],
-        "temperature": 0.8
+        "temperature": 0.8,
+        "max_tokens": 1500
     }
 
     response = requests.post(url, headers=headers, json=payload, timeout=60)

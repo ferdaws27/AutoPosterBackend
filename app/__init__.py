@@ -82,7 +82,8 @@ def create_app():
     if not mongo_uri or not mongo_db_name:
         raise ValueError("MONGO_URI ou MONGO_DB non défini dans .env")
 
-    mongo_client = MongoClient(mongo_uri)
+    import certifi
+    mongo_client = MongoClient(mongo_uri, tlsCAFile=certifi.where())
     app.mongo_client = mongo_client
     app.mongo = mongo_client[mongo_db_name]
 
@@ -136,6 +137,10 @@ def create_app():
     from .routes.trends import trends_bp
     from .routes.news import news_bp
     from .routes.oauth_medium import oauth_medium_bp
+    from .routes.settings import settings_bp
+    from .routes.images import images_bp
+    from .routes.media import media_bp
+    from .routes.video_builder import video_builder_bp
     from .routes.ai_ideas import ai_ideas_bp
     from .routes.ai_generate import ai_generate_bp
     from .routes.ab_test import ab_test_bp
@@ -152,6 +157,10 @@ def create_app():
     app.register_blueprint(trends_bp)
     app.register_blueprint(news_bp)
     app.register_blueprint(oauth_medium_bp)
+    app.register_blueprint(settings_bp)
+    app.register_blueprint(images_bp)
+    app.register_blueprint(media_bp)
+    app.register_blueprint(video_builder_bp)
     app.register_blueprint(ai_ideas_bp, url_prefix="/api/ai-ideas")
     app.register_blueprint(ai_generate_bp, url_prefix="/api/ai/generate")
     app.register_blueprint(ab_test_bp)
