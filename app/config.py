@@ -46,3 +46,9 @@ class Config:
 
     # Medium RapidAPI
     RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY", "c426905c0fmsh20c96dd32c32066p16845cjsn8d3fd7fad7e")
+
+    # Apify scraping
+    APIFY_KEY = os.getenv("APIFY_KEY")
+
+    # SerpAPI for image search fallback
+    SERPAPI_KEY = os.getenv("SERPAPI_KEY")

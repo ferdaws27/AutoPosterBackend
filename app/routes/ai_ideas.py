@@ -8,29 +8,29 @@ ai_ideas_bp = Blueprint("ai_ideas", __name__)
 
 GENERATION_THEMES = [
     {
-        "phase": "découverte",
-        "focus": "tendances émergentes et innovations récentes",
-        "angle": "ce qui est nouveau et surprenant",
+        "phase": "discovery",
+        "focus": "emerging trends and recent innovations",
+        "angle": "what is new and surprising",
     },
     {
-        "phase": "approfondissement",
-        "focus": "stratégies avancées et techniques concrètes",
-        "angle": "comment appliquer et optimiser",
+        "phase": "deep-dive",
+        "focus": "advanced strategies and concrete techniques",
+        "angle": "how to apply and optimize",
     },
     {
-        "phase": "spécialisation",
-        "focus": "niches spécifiques et expertises pointues",
-        "angle": "sujets techniques et avancés",
+        "phase": "specialization",
+        "focus": "specific niches and sharp expertise",
+        "angle": "technical and advanced topics",
     },
     {
-        "phase": "expérimentation",
-        "focus": "approches non conventionnelles et tests",
-        "angle": "essayer ce que les autres ne font pas",
+        "phase": "experimentation",
+        "focus": "unconventional approaches and tests",
+        "angle": "try what others don't",
     },
     {
         "phase": "domination",
-        "focus": "stratégies de leadership et d'autorité",
-        "angle": "devenir la référence dans son domaine",
+        "focus": "leadership and authority strategies",
+        "angle": "become the reference in your field",
     },
 ]
 
@@ -42,6 +42,11 @@ def generate_ideas():
         generation_count = int(data.get("generationCount", 1))
         model = data.get("model", current_app.config["OPENROUTER_MODEL"])
         temperature = float(data.get("temperature", 0.9))
+        tone = data.get("tone", "friendly")
+        creativity = data.get("creativity", "Balanced")
+        content_length = data.get("contentLength", "Medium (100–200 words)")
+        voice_profile = data.get("voiceProfile")
+        language = data.get("language", "en")
 
         theme_index = (generation_count - 1) % len(GENERATION_THEMES)
         current_theme = GENERATION_THEMES[theme_index]
@@ -50,28 +55,62 @@ def generate_ideas():
 
         date_str = datetime.now().strftime("%A %d %B %Y")
 
-        prompt = f"""Tu es un expert en marketing digital et création de contenu. C'est la GÉNÉRATION {generation_count}.
+        # Resolve language name from code
+        lang_map = {
+            "fr": "French", "en": "English", "ar": "Arabic",
+            "es": "Spanish", "de": "German", "pt": "Portuguese",
+            "it": "Italian", "nl": "Dutch", "tr": "Turkish",
+            "ja": "Japanese", "zh": "Chinese", "ko": "Korean",
+            "hi": "Hindi", "ru": "Russian",
+        }
+        lang_code = language.split("-")[0].lower() if language else "en"
+        lang_name = lang_map.get(lang_code, "English")
 
-CONTEXTE: {date_str}
-PHASE ACTUELLE: {current_theme['phase']}
-FOCUS SPÉCIFIQUE: {current_theme['focus']}
-ANGLE D'APPROCHE: {current_theme['angle']}
+        # Build voice context
+        voice_context = ""
+        if voice_profile:
+            voice_context = f"""\nUSER'S VOICE PROFILE (match this style):
+- Tone: {voice_profile.get('tone', '')}/{voice_profile.get('sentiment', '')}
+- Style: {voice_profile.get('writingStyle', '')}
+- Theme: {voice_profile.get('primaryTheme', '')}
+- Keywords: {', '.join((voice_profile.get('keywords') or [])[:5])}"""
 
-GÉNÈRE 5 idées de contenu UNIQUEMENT pour cette phase {current_theme['phase']}.
-Ces idées doivent être COMPLÈTEMENT DIFFÉRENTES des générations précédentes.
+        prompt = f"""You are an expert in digital marketing and content creation. This is GENERATION {generation_count}.
 
-FORMAT JSON EXACT:
+CONTEXT: {date_str}
+CURRENT PHASE: {current_theme['phase']}
+SPECIFIC FOCUS: {current_theme['focus']}
+APPROACH ANGLE: {current_theme['angle']}
+
+USER PREFERENCES:
+- Tone: {tone}
+- Creativity: {creativity}
+- Content length: {content_length}{voice_context}
+
+GENERATE 5 content ideas SPECIFICALLY for this {current_theme['phase']} phase.
+Ideas must be COMPLETELY DIFFERENT from previous generations.
+Ideas should match the user's tone ({tone}) and creativity level ({creativity}).
+
+CRITICAL LANGUAGE RULE — HIGHEST PRIORITY:
+The user's language is {lang_name}. You MUST write ALL "title" and "desc" fields ENTIRELY in {lang_name}.
+- If {lang_name} is French → titles and descriptions in French
+- If {lang_name} is English → titles and descriptions in English  
+- If {lang_name} is Arabic → titles and descriptions in Arabic
+- NEVER mix languages. NEVER default to English if the language is different.
+- The JSON keys (category, platform, status) stay in English. Only "title" and "desc" values must be in {lang_name}.
+
+EXACT JSON FORMAT:
 [
   {{
     "category": "Trending|Insights|Growth|Strategy|Tips|Tech|Business",
     "platform": "twitter|linkedin|medium",
-    "title": "TITRE SPÉCIFIQUE (max 60 caractères)",
-    "desc": "Description avec VALEUR CONCRÈTE (max 150 caractères)",
+    "title": "SPECIFIC TITLE in {lang_name} (max 60 chars)",
+    "desc": "Description in {lang_name} with CONCRETE VALUE (max 150 chars)",
     "status": "Scheduled|Review|Draft"
   }}
 ]
 
-IMPORTANT: Sois SPÉCIFIQUE à cette phase. Retourne UNIQUEMENT le JSON valide avec 5 objets."""
+IMPORTANT: Be SPECIFIC to this phase. Return ONLY valid JSON with 5 objects."""
 
         api_key = current_app.config["OPENROUTER_API_KEY"]
         if not api_key:
@@ -114,8 +153,8 @@ IMPORTANT: Sois SPÉCIFIQUE à cette phase. Retourne UNIQUEMENT le JSON valide a
             formatted.append({
                 "category": str(idea.get("category", "Strategy"))[:30],
                 "platform": idea.get("platform", "twitter") if idea.get("platform") in ("twitter", "linkedin", "medium") else "twitter",
-                "title": str(idea.get("title", "Nouvelle idée"))[:80],
-                "desc": str(idea.get("desc", "Description à venir"))[:200],
+                "title": str(idea.get("title", "New idea"))[:80],
+                "desc": str(idea.get("desc", "Description coming soon"))[:200],
                 "status": idea.get("status", "Draft") if idea.get("status") in ("Scheduled", "Review", "Draft") else "Draft",
             })
 

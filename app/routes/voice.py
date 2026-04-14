@@ -2,6 +2,8 @@ from flask import Blueprint, current_app, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 import os
 import tempfile
+import json
+import requests as http_requests
 from werkzeug.utils import secure_filename
 import nltk
 import spacy
@@ -32,8 +34,173 @@ except:
 # Initialize speech recognizer
 recognizer = sr.Recognizer()
 
+
+def _ai_voice_analysis(text, source_type="text"):
+    """Use OpenRouter AI to deeply analyze voice from text or speech transcription."""
+    api_key = os.getenv("OPENROUTER_API_KEY")
+    model = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini")
+    if not api_key:
+        return None
+
+    # Limit text to ~3000 chars for prompt efficiency
+    sample = text[:3000]
+
+    if source_type == "audio":
+        prompt = f"""Analyze the following speech transcription from a voice recording and extract the speaker's unique vocal communication style.
+
+SPEECH TRANSCRIPTION:
+---
+{sample}
+---
+
+This is a transcription of someone SPEAKING, not writing. Analyze their speaking style deeply and return a JSON object with these exact keys:
+{{
+  "tone": "dominant speaking tone (e.g. Warm & Enthusiastic, Calm & Authoritative, Energetic & Motivational, Casual & Friendly)",
+  "sentenceStyle": "how they construct spoken sentences (e.g. Short & Direct, Long & Storytelling, Conversational & Flowing, Punchy & Rhythmic)",
+  "structure": "how they organize their speech (e.g. Story -> Point -> Takeaway, Direct Statement -> Explanation -> Question, Free-flowing Conversation)",
+  "emojiUsage": "None",
+  "hashtagUsage": "None",
+  "vocabularyLevel": "Simple / Intermediate / Advanced / Technical",
+  "hookStyle": "how they grab attention when speaking (e.g. Bold Opening Statement, Rhetorical Question, Personal Story, Provocative Claim)",
+  "ctaStyle": "how they close or engage listeners (e.g. Open Question, Call to Action, Reflective Pause, Summary)",
+  "contentThemes": ["top 3-5 topics they talk about"],
+  "writingPatterns": ["3-5 speaking patterns like 'Uses verbal fillers', 'Repeats key phrases', 'Speaks in metaphors', 'Lists examples in threes'"],
+  "uniqueTraits": ["2-4 distinctive vocal/speaking traits that set this speaker apart"],
+  "confidenceScore": 70
+}}
+
+Focus on SPEAKING patterns (pace, energy, verbal habits, conversational style) not writing patterns.
+Be specific and accurate based on the actual transcription. Do not use generic descriptions.
+Return ONLY the JSON object, no markdown, no explanation."""
+        system_msg = "You are a vocal communication analyst specializing in speaking style. Return only valid JSON."
+    else:
+        prompt = f"""Analyze the following writing samples and extract the author's unique writing voice profile.
+
+WRITING SAMPLES:
+---
+{sample}
+---
+
+Analyze deeply and return a JSON object with these exact keys:
+{{
+  "tone": "dominant emotional tone (e.g. Authoritative & Inspiring, Casual & Witty, Professional & Analytical)",
+  "sentenceStyle": "sentence pattern (e.g. Short & Punchy, Long & Flowing, Mixed & Rhythmic)",
+  "structure": "typical post structure (e.g. Hook -> Story -> Lesson -> CTA)",
+  "emojiUsage": "None / Minimal / Moderate / Heavy",
+  "hashtagUsage": "None / Minimal / Moderate / Heavy",
+  "vocabularyLevel": "Simple / Intermediate / Advanced / Technical",
+  "hookStyle": "how they open posts (e.g. Bold Claim, Question, Story Opening, Statistic)",
+  "ctaStyle": "how they close posts (e.g. Question to Audience, Direct Ask, Reflective, None)",
+  "contentThemes": ["top 3-5 recurring themes"],
+  "writingPatterns": ["3-5 specific patterns like 'Uses analogies', 'Lists of 3', 'Personal anecdotes'"],
+  "uniqueTraits": ["2-4 distinctive writing traits that set this author apart"],
+  "confidenceScore": 75
+}}
+
+Be specific and accurate based on the actual text. Do not use generic descriptions.
+Return ONLY the JSON object, no markdown, no explanation."""
+        system_msg = "You are a writing style analyst. Return only valid JSON."
+
+    try:
+        resp = http_requests.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": system_msg},
+                    {"role": "user", "content": prompt},
+                ],
+                "temperature": 0.4,
+                "max_tokens": 800,
+            },
+            timeout=30,
+        )
+        if resp.status_code != 200:
+            return None
+
+        content = resp.json()["choices"][0]["message"]["content"].strip()
+        # Extract JSON from response
+        if content.startswith("```"):
+            content = re.sub(r"```(?:json)?", "", content).strip()
+        brace_start = content.find("{")
+        brace_end = content.rfind("}")
+        if brace_start != -1 and brace_end != -1:
+            content = content[brace_start : brace_end + 1]
+        return json.loads(content)
+    except Exception as e:
+        print(f"AI voice analysis error: {e}")
+        return None
+
+
+def _transcribe_with_assemblyai(filepath):
+    """Transcribe audio file using AssemblyAI API."""
+    import time
+    api_key = os.getenv("VOICE_API_KEY")
+    if not api_key:
+        print("AssemblyAI API key (VOICE_API_KEY) not found in environment")
+        return None
+
+    base_url = "https://api.assemblyai.com"
+    headers = {"authorization": api_key}
+
+    # Step 1: Upload the audio file
+    try:
+        with open(filepath, "rb") as f:
+            upload_resp = http_requests.post(
+                base_url + "/v2/upload",
+                headers=headers,
+                data=f
+            )
+        print(f"AssemblyAI upload response: {upload_resp.status_code}")
+        if upload_resp.status_code != 200:
+            print(f"AssemblyAI upload failed: {upload_resp.text}")
+            return None
+        audio_url = upload_resp.json()["upload_url"]
+    except Exception as e:
+        print(f"AssemblyAI upload error: {e}")
+        return None
+
+    # Step 2: Request transcription
+    try:
+        transcript_resp = http_requests.post(
+            base_url + "/v2/transcript",
+            headers=headers,
+            json={
+                "audio_url": audio_url,
+                "speech_models": ["universal-3-pro", "universal-2"],
+            }
+        )
+        print(f"AssemblyAI transcript request response: {transcript_resp.status_code}")
+        if transcript_resp.status_code != 200:
+            print(f"AssemblyAI transcript request failed: {transcript_resp.text}")
+            return None
+        transcript_id = transcript_resp.json()["id"]
+    except Exception as e:
+        print(f"AssemblyAI transcript request error: {e}")
+        return None
+
+    # Step 3: Poll for result
+    polling_url = base_url + "/v2/transcript/" + transcript_id
+    while True:
+        poll_resp = http_requests.get(polling_url, headers=headers)
+        r = poll_resp.json()
+        st = r.get("status")
+        if st == "completed":
+            txt = r.get("text")
+            print(f"AssemblyAI transcription completed, text length: {len(txt or '')}")
+            return txt
+        elif st == "error":
+            print(f"AssemblyAI transcription error: {r.get('error')}")
+            return None
+        time.sleep(3)
+
+
 ALLOWED_EXTENSIONS = {
-    'audio': ['mp3', 'wav', 'm4a', 'flac'],
+    'audio': ['mp3', 'wav', 'm4a', 'flac', 'ogg', 'webm'],
     'text': ['txt', 'pdf', 'docx']
 }
 
@@ -61,20 +228,8 @@ def extract_text_from_file(filepath, filename):
                     return text
         
         elif ext in ALLOWED_EXTENSIONS['audio']:
-            # Convert audio to text using speech recognition
-            audio = AudioSegment.from_file(filepath)
-            
-            # Export audio to temporary WAV file
-            temp_wav = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
-            audio.export(temp_wav.name, format='wav')
-            
-            try:
-                with sr.AudioFile(temp_wav.name) as source:
-                    audio_data = recognizer.record(source)
-                    text = recognizer.recognize_google(audio_data)
-                    return text
-            finally:
-                os.unlink(temp_wav.name)
+            # Transcribe audio using AssemblyAI
+            return _transcribe_with_assemblyai(filepath)
                 
     except Exception as e:
         print(f"Error extracting text: {e}")
@@ -443,25 +598,39 @@ def analyze_voice():
             text = extract_text_from_file(filepath, filename)
             
             if not text:
+                ext = filename.rsplit('.', 1)[1].lower()
+                if ext in ALLOWED_EXTENSIONS['audio']:
+                    return jsonify({
+                        "success": False,
+                        "error": "No speech detected in the recording. Please speak clearly and try again."
+                    }), 400
                 return jsonify({
                     "success": False,
                     "error": "Could not extract text from file"
                 }), 400
             
-            # Perform analyses
+            # Determine file type
+            ext = filename.rsplit('.', 1)[1].lower()
+            is_audio = ext in ALLOWED_EXTENSIONS['audio']
+
+            # Perform NLTK/spaCy analyses
             nltk_result = analyze_with_nltk(text)
             spacy_result = analyze_with_spacy(text)
-            voice_result = analyze_audio_features(filepath)
+            voice_result = analyze_audio_features(filepath) if is_audio else None
             
+            # AI-powered deep voice analysis (speech vs writing)
+            ai_analysis = _ai_voice_analysis(text, source_type="audio" if is_audio else "text")
+
             return jsonify({
                 "success": True,
                 "data": {
                     "filename": filename,
-                    "file_type": "audio" if filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS['audio'] else "text",
+                    "file_type": "audio" if is_audio else "text",
                     "extracted_text": text[:500] + "..." if len(text) > 500 else text,
                     "nltk": nltk_result,
                     "spacy": spacy_result,
-                    "voice": voice_result
+                    "voice": voice_result,
+                    "ai": ai_analysis,
                 }
             })
             
@@ -475,6 +644,37 @@ def analyze_voice():
             "success": False,
             "error": str(e)
         }), 500
+
+@voice_bp.post("/analyze-text")
+@jwt_required()
+def analyze_voice_text():
+    """Analyze transcribed speech text (no file upload needed)"""
+    try:
+        data = request.get_json()
+        text = (data or {}).get("text", "").strip()
+        source_type = (data or {}).get("source_type", "audio")
+
+        if not text or len(text) < 10:
+            return jsonify({"success": False, "error": "Text too short. Please speak for at least 10 seconds."}), 400
+
+        nltk_result = analyze_with_nltk(text)
+        spacy_result = analyze_with_spacy(text)
+        ai_analysis = _ai_voice_analysis(text, source_type=source_type)
+
+        return jsonify({
+            "success": True,
+            "data": {
+                "filename": "live-recording",
+                "file_type": "audio",
+                "extracted_text": text[:500] + "..." if len(text) > 500 else text,
+                "nltk": nltk_result,
+                "spacy": spacy_result,
+                "voice": None,
+                "ai": ai_analysis,
+            }
+        })
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
 
 @voice_bp.get("/models/status")
 @jwt_required()

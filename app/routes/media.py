@@ -18,6 +18,19 @@ def generate_media():
     data = request.get_json()
     text = (data.get("text") or "").strip()
     media_type = data.get("type", "carousel")  # carousel | video
+    voice_profile = data.get("voiceProfile")
+
+    voice_context = ""
+    if voice_profile:
+        voice_context = f"""\n\nWRITING VOICE PROFILE (adapt all content to match this style):
+- Tone: {voice_profile.get('tone', 'Neutral')}
+- Sentence Style: {voice_profile.get('sentenceStyle', 'Medium')}
+- Structure: {voice_profile.get('structure', '')}
+- Hook Style: {voice_profile.get('hookStyle', '')}
+- Emoji Usage: {voice_profile.get('emojiUsage', 'Minimal')}
+- Writing Patterns: {', '.join(voice_profile.get('writingPatterns', []))}
+- Unique Traits: {', '.join(voice_profile.get('uniqueTraits', []))}
+Make sure headlines, body text, narration, and CTAs all reflect this voice."""
 
     if not text:
         return jsonify({"success": False, "error": "Text content is required"}), 400
@@ -36,6 +49,7 @@ CONTENT TO TRANSFORM:
 ---
 {text}
 ---
+{voice_context}
 
 STRATEGIC FRAMEWORK:
 1. HOOK SLIDE (Slide 1): Use a pattern-interrupt headline — a bold claim, surprising statistic, contrarian take, or curiosity gap that makes people STOP scrolling. This is the most critical slide.
@@ -78,6 +92,7 @@ CONTENT TO TRANSFORM:
 ---
 {text}
 ---
+{voice_context}
 
 VIDEO STRUCTURE FRAMEWORK:
 1. THE HOOK (0-3s): The first 3 seconds decide everything. Use one of these proven patterns:

@@ -112,11 +112,11 @@ def create_app():
                 role="FREE"
             )
             result = users_collection.insert_one(guest.to_dict())
-            print(f"✅ Guest user created with ID: {result.inserted_id}")
+            print(f"[OK] Guest user created with ID: {result.inserted_id}")
         else:
-            print(f"✅ Guest user already exists: {guest_user.get('_id')}")
+            print(f"[OK] Guest user already exists: {guest_user.get('_id')}")
     except Exception as e:
-        print(f"⚠️  Could not initialize guest user: {e}")
+        print(f"[WARN] Could not initialize guest user: {e}")
 
     # OpenRouter client
     openrouter_client = OpenAI(
@@ -143,7 +143,8 @@ def create_app():
     from .routes.video_builder import video_builder_bp
     from .routes.ai_ideas import ai_ideas_bp
     from .routes.ai_generate import ai_generate_bp
-    from .routes.ab_test import ab_test_bp
+    from .routes.clone import clone_bp
+    
 
     # Register all blueprints in organized manner
     app.register_blueprint(oauth_linkedin_bp)
@@ -163,7 +164,8 @@ def create_app():
     app.register_blueprint(video_builder_bp)
     app.register_blueprint(ai_ideas_bp, url_prefix="/api/ai-ideas")
     app.register_blueprint(ai_generate_bp, url_prefix="/api/ai/generate")
-    app.register_blueprint(ab_test_bp)
+    app.register_blueprint(clone_bp, url_prefix="/api/clone")
+    
 
     # Route health
     @app.get("/api/health")

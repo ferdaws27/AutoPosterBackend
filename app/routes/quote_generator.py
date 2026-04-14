@@ -17,10 +17,25 @@ def normalize_platform_name(platform: str) -> str:
     return mapping.get(platform.lower(), platform.capitalize())
 
 
-def build_prompt(quote: str, selected_platforms: list, brand_enabled: bool) -> str:
+def build_prompt(quote: str, selected_platforms: list, brand_enabled: bool, voice_profile: dict = None) -> str:
     platforms = [normalize_platform_name(p) for p in selected_platforms]
 
-    return f"""You are a world-class social media copywriter with 10+ years of experience crafting viral content for Fortune 500 brands. You transform quotes into scroll-stopping, platform-native posts that drive engagement.
+    voice_context = ""
+    if voice_profile:
+        voice_context = f"""\n\nWRITING VOICE PROFILE (apply this style to ALL variations):
+- Tone: {voice_profile.get('tone', 'Neutral')}
+- Sentence Style: {voice_profile.get('sentenceStyle', 'Medium')}
+- Structure: {voice_profile.get('structure', '')}
+- Hook Style: {voice_profile.get('hookStyle', '')}
+- CTA Style: {voice_profile.get('ctaStyle', '')}
+- Emoji Usage: {voice_profile.get('emojiUsage', 'Minimal')}
+- Hashtag Usage: {voice_profile.get('hashtagUsage', 'Minimal')}
+- Vocabulary Level: {voice_profile.get('vocabularyLevel', 'Intermediate')}
+- Writing Patterns: {', '.join(voice_profile.get('writingPatterns', []))}
+- Unique Traits: {', '.join(voice_profile.get('uniqueTraits', []))}
+Adapt all variations to match this voice profile while staying platform-native."""
+
+    return f"""You are a world-class social media copywriter with 10+ years of experience crafting viral content for Fortune 500 brands. You transform quotes into scroll-stopping, platform-native posts that drive engagement.{voice_context}
 
 CRITICAL LANGUAGE RULE:
 Detect the language of the original quote below. Write ALL variations in THAT SAME LANGUAGE.
@@ -167,6 +182,7 @@ def generate_quotes():
         quote = data.get("quote", "").strip()
         selected_platforms = data.get("selectedPlatforms", [])
         brand_enabled = data.get("brandEnabled", False)
+        voice_profile = data.get("voiceProfile")
 
         if not quote:
             return jsonify({"error": "Le champ quote est obligatoire"}), 400
@@ -177,7 +193,7 @@ def generate_quotes():
         if not selected_platforms or not isinstance(selected_platforms, list):
             return jsonify({"error": "Au moins une plateforme est requise"}), 400
 
-        prompt = build_prompt(quote, selected_platforms, brand_enabled)
+        prompt = build_prompt(quote, selected_platforms, brand_enabled, voice_profile)
         ai_response = call_openrouter(prompt)
 
         content = ai_response["choices"][0]["message"]["content"]
