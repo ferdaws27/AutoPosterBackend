@@ -156,14 +156,25 @@ def create_ab_test():
         return jsonify({"message": "content is required"}), 400
 
     user_id = get_jwt_identity()
+    platforms = data.get("platforms", ["twitter", "linkedin"])
+
+    # Build per-platform variant structure
+    variants = {}
+    for p in platforms:
+        variants[p] = {
+            "a": {"label": "Variant A", "content": "", "likes": 0, "comments": 0, "shares": 0, "engagement_rate": 0},
+            "b": {"label": "Variant B", "content": "", "likes": 0, "comments": 0, "shares": 0, "engagement_rate": 0},
+        }
+
     doc = {
         "user_id": user_id,
         "name": data.get("name") or "Untitled Test",
         "original_content": content,
         "variation_type": data.get("variation_type", "tone"),
-        "platforms": data.get("platforms", ["twitter", "linkedin"]),
+        "platforms": platforms,
         "duration": data.get("duration", "24h"),
         "status": "generating",
+        "variants": variants,
         "variant_a": {
             "label": "Variant A",
             "content": "",
@@ -192,26 +203,26 @@ def create_ab_test():
     app = current_app._get_current_object()
     threading.Thread(
         target=_generate_variants,
-        args=(app, str(result.inserted_id), content, doc["variation_type"]),
+        args=(app, str(result.inserted_id), content, doc["variation_type"], doc["platforms"]),
         daemon=True,
     ).start()
 
     return jsonify(doc), 201
 
 
-def _generate_variants(app, test_id, content, variation_type):
-    """Background: call AI twice to produce two post variations."""
+def _generate_variants(app, test_id, content, variation_type, platforms=None):
+    """Background: call AI for each platform to produce two post variations per platform."""
     with app.app_context():
         try:
             template, styles = VARIATION_PROMPTS.get(
                 variation_type, VARIATION_PROMPTS["tone"]
             )
 
-            prompt_a = template.format(content=content, style=styles[0])
-            prompt_b = template.format(content=content, style=styles[1])
-
-            variant_a_text = _call_ai(app, prompt_a)
-            variant_b_text = _call_ai(app, prompt_b)
+            platform_rules = {
+                "twitter": "PLATFORM: Twitter/X — Max 280 characters. Punchy, short, high-impact. Use line breaks for rhythm. No fluff.",
+                "linkedin": "PLATFORM: LinkedIn — Professional but human. 100-200 words. Bold first line (it's the preview). End with a discussion question.",
+                "medium": "PLATFORM: Medium — Editorial, essay-like voice. 150-300 words. SEO-friendly. Depth and insight.",
+            }
 
             labels = {
                 "tone": ["Professional", "Casual"],
@@ -222,18 +233,40 @@ def _generate_variants(app, test_id, content, variation_type):
             }
             label_pair = labels.get(variation_type, ["Variant A", "Variant B"])
 
+            if not platforms:
+                platforms = ["twitter", "linkedin"]
+
+            update_fields = {"status": "ready"}
+            # Also set first platform result as the legacy variant_a/variant_b for backward compat
+            first_platform_done = False
+
+            for platform in platforms:
+                rule = platform_rules.get(platform, "")
+                platform_context = f"\n\n{rule}\nWrite the post specifically for {platform}. Follow the platform constraints strictly.\n"
+
+                prompt_a = template.format(content=content, style=styles[0]) + platform_context
+                prompt_b = template.format(content=content, style=styles[1]) + platform_context
+
+                variant_a_text = _call_ai(app, prompt_a)
+                variant_b_text = _call_ai(app, prompt_b)
+
+                update_fields[f"variants.{platform}.a.content"] = variant_a_text
+                update_fields[f"variants.{platform}.a.label"] = label_pair[0]
+                update_fields[f"variants.{platform}.b.content"] = variant_b_text
+                update_fields[f"variants.{platform}.b.label"] = label_pair[1]
+
+                # Keep legacy fields (variant_a/variant_b) with first platform for backward compat
+                if not first_platform_done:
+                    update_fields["variant_a.content"] = variant_a_text
+                    update_fields["variant_a.label"] = label_pair[0]
+                    update_fields["variant_b.content"] = variant_b_text
+                    update_fields["variant_b.label"] = label_pair[1]
+                    first_platform_done = True
+
             _col_bg = app.mongo[COLLECTION]
             _col_bg.update_one(
                 {"_id": ObjectId(test_id)},
-                {
-                    "$set": {
-                        "status": "ready",
-                        "variant_a.content": variant_a_text,
-                        "variant_a.label": label_pair[0],
-                        "variant_b.content": variant_b_text,
-                        "variant_b.label": label_pair[1],
-                    }
-                },
+                {"$set": update_fields},
             )
         except Exception as e:
             print(f"AB variant generation error: {e}")
@@ -338,57 +371,86 @@ TICK_SECONDS = 60  # 1 minute between each round
 
 
 def _simulate_engagement(app, test_id):
-    """Incrementally add random engagement every 3 minutes until duration ends."""
+    """Incrementally add random engagement every minute until duration ends."""
     with app.app_context():
         try:
             _col_bg = app.mongo[COLLECTION]
             doc = _col_bg.find_one({"_id": ObjectId(test_id)})
             duration = doc.get("duration", "24h") if doc else "24h"
             total_rounds = DURATION_ROUNDS.get(duration, 8)
+            platforms = doc.get("platforms", ["twitter", "linkedin"]) if doc else ["twitter", "linkedin"]
 
             # Pick which side gets a boost (stays consistent across all rounds)
             boosted_side = random.choice(["A", "B"])
             boost = random.uniform(1.15, 1.50)
 
-            # Running totals
-            a_likes = 0
-            a_comments = 0
-            a_shares = 0
-            b_likes = 0
-            b_comments = 0
-            b_shares = 0
+            # Per-platform running totals
+            platform_totals = {}
+            for p in platforms:
+                platform_totals[p] = {
+                    "a": {"likes": 0, "comments": 0, "shares": 0},
+                    "b": {"likes": 0, "comments": 0, "shares": 0},
+                }
+
+            # Legacy running totals (aggregated across platforms)
+            a_likes = a_comments = a_shares = 0
+            b_likes = b_comments = b_shares = 0
 
             for round_num in range(1, total_rounds + 1):
-                # Check if the test was deleted or stopped
                 current = _col_bg.find_one({"_id": ObjectId(test_id)})
                 if not current or current.get("status") != "running":
                     return
 
-                # Random new interactions this round
-                new_likes = random.randint(5, 60)
-                new_comments = random.randint(1, 15)
-                new_shares = random.randint(0, 8)
+                update_fields = {
+                    "current_round": round_num,
+                    "total_rounds": total_rounds,
+                }
 
-                # Apply boost to the favored side, natural variance to the other
-                variance_a = random.uniform(0.7, 1.3)
-                variance_b = random.uniform(0.7, 1.3)
+                # Generate engagement per platform
+                for p in platforms:
+                    new_likes = random.randint(5, 60)
+                    new_comments = random.randint(1, 15)
+                    new_shares = random.randint(0, 8)
+                    variance_a = random.uniform(0.7, 1.3)
+                    variance_b = random.uniform(0.7, 1.3)
 
-                if boosted_side == "A":
-                    a_likes += int(new_likes * boost * variance_a)
-                    a_comments += int(new_comments * boost * variance_a)
-                    a_shares += int(new_shares * boost * variance_a)
-                    b_likes += int(new_likes * variance_b)
-                    b_comments += int(new_comments * variance_b)
-                    b_shares += int(new_shares * variance_b)
-                else:
-                    a_likes += int(new_likes * variance_a)
-                    a_comments += int(new_comments * variance_a)
-                    a_shares += int(new_shares * variance_a)
-                    b_likes += int(new_likes * boost * variance_b)
-                    b_comments += int(new_comments * boost * variance_b)
-                    b_shares += int(new_shares * boost * variance_b)
+                    pt = platform_totals[p]
+                    if boosted_side == "A":
+                        pt["a"]["likes"] += int(new_likes * boost * variance_a)
+                        pt["a"]["comments"] += int(new_comments * boost * variance_a)
+                        pt["a"]["shares"] += int(new_shares * boost * variance_a)
+                        pt["b"]["likes"] += int(new_likes * variance_b)
+                        pt["b"]["comments"] += int(new_comments * variance_b)
+                        pt["b"]["shares"] += int(new_shares * variance_b)
+                    else:
+                        pt["a"]["likes"] += int(new_likes * variance_a)
+                        pt["a"]["comments"] += int(new_comments * variance_a)
+                        pt["a"]["shares"] += int(new_shares * variance_a)
+                        pt["b"]["likes"] += int(new_likes * boost * variance_b)
+                        pt["b"]["comments"] += int(new_comments * boost * variance_b)
+                        pt["b"]["shares"] += int(new_shares * boost * variance_b)
 
-                # Engagement rate
+                    a_sc = pt["a"]["likes"] + pt["a"]["comments"] * 3 + pt["a"]["shares"] * 5
+                    b_sc = pt["b"]["likes"] + pt["b"]["comments"] * 3 + pt["b"]["shares"] * 5
+                    total_sc = max(a_sc + b_sc, 1)
+
+                    update_fields[f"variants.{p}.a.likes"] = pt["a"]["likes"]
+                    update_fields[f"variants.{p}.a.comments"] = pt["a"]["comments"]
+                    update_fields[f"variants.{p}.a.shares"] = pt["a"]["shares"]
+                    update_fields[f"variants.{p}.a.engagement_rate"] = round(a_sc / total_sc * 100, 1)
+                    update_fields[f"variants.{p}.b.likes"] = pt["b"]["likes"]
+                    update_fields[f"variants.{p}.b.comments"] = pt["b"]["comments"]
+                    update_fields[f"variants.{p}.b.shares"] = pt["b"]["shares"]
+                    update_fields[f"variants.{p}.b.engagement_rate"] = round(b_sc / total_sc * 100, 1)
+
+                # Aggregate across platforms for legacy fields
+                a_likes = sum(platform_totals[p]["a"]["likes"] for p in platforms)
+                a_comments = sum(platform_totals[p]["a"]["comments"] for p in platforms)
+                a_shares = sum(platform_totals[p]["a"]["shares"] for p in platforms)
+                b_likes = sum(platform_totals[p]["b"]["likes"] for p in platforms)
+                b_comments = sum(platform_totals[p]["b"]["comments"] for p in platforms)
+                b_shares = sum(platform_totals[p]["b"]["shares"] for p in platforms)
+
                 a_score = a_likes + a_comments * 3 + a_shares * 5
                 b_score = b_likes + b_comments * 3 + b_shares * 5
                 total_reach = max(a_score + b_score, 1)
@@ -396,27 +458,14 @@ def _simulate_engagement(app, test_id):
                 b_rate = round(b_score / total_reach * 100, 1)
 
                 is_last_round = round_num == total_rounds
-
-                # Determine current leader / final winner
                 winner = "A" if a_score > b_score else "B"
                 diff = abs(a_score - b_score)
                 loser_score = min(a_score, b_score)
                 improvement_pct = round(diff / max(loser_score, 1) * 100)
                 improvement = f"+{improvement_pct}%"
-
                 total_impressions = (a_likes + b_likes) * 12 + (a_comments + b_comments) * 25 + (a_shares + b_shares) * 40
 
-                # Round snapshot for time-series analytics
-                round_snapshot = {
-                    "round": round_num,
-                    "timestamp": datetime.utcnow().isoformat(),
-                    "a": {"likes": a_likes, "comments": a_comments, "shares": a_shares, "score": a_score, "rate": a_rate},
-                    "b": {"likes": b_likes, "comments": b_comments, "shares": b_shares, "score": b_score, "rate": b_rate},
-                    "delta": abs(a_score - b_score),
-                    "improvement_pct": improvement_pct,
-                }
-
-                update_fields = {
+                update_fields.update({
                     "variant_a.likes": a_likes,
                     "variant_a.comments": a_comments,
                     "variant_a.shares": a_shares,
@@ -425,9 +474,16 @@ def _simulate_engagement(app, test_id):
                     "variant_b.comments": b_comments,
                     "variant_b.shares": b_shares,
                     "variant_b.engagement_rate": b_rate,
-                    "current_round": round_num,
-                    "total_rounds": total_rounds,
                     "total_impressions": total_impressions,
+                })
+
+                round_snapshot = {
+                    "round": round_num,
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "a": {"likes": a_likes, "comments": a_comments, "shares": a_shares, "score": a_score, "rate": a_rate},
+                    "b": {"likes": b_likes, "comments": b_comments, "shares": b_shares, "score": b_score, "rate": b_rate},
+                    "delta": abs(a_score - b_score),
+                    "improvement_pct": improvement_pct,
                 }
 
                 if is_last_round:
