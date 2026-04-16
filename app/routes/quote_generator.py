@@ -48,79 +48,81 @@ Adapt all variations to match this voice profile while staying platform-native."
         if instruction:
             style_context = f"\n\nSTYLE PRESET — {style_preset.upper()}:\n{instruction}"
 
-    return f"""You are a world-class social media copywriter with 10+ years of experience crafting viral content for Fortune 500 brands. You transform quotes into scroll-stopping, platform-native posts that drive engagement.{voice_context}{style_context}
+    # Build platform-specific rules only for selected platforms
+    platform_rules = {
+        "Twitter": """TWITTER (max 280 chars):
+- Generate a powerful, standalone citation/quote
+- Must be punchy, memorable, and tweetable
+- Use line breaks for rhythm if needed
+- No hashtags unless they truly add value (1 max)""",
+        "LinkedIn": """LINKEDIN:
+- Generate a professional, thought-provoking citation
+- Can be slightly longer and more nuanced
+- Should sound like wisdom from an industry leader
+- No hashtags, no CTA — just the pure citation""",
+        "Medium": """MEDIUM:
+- Generate a deep, reflective, essay-worthy citation
+- Can be longer and more literary
+- Should feel like the opening line of a great article
+- Poetic or philosophical tone welcome""",
+    }
+
+    selected_rules = "\n\n".join(platform_rules[p] for p in platforms if p in platform_rules)
+
+    return f"""You are a master quote/citation generator. Your job is to generate NEW, ORIGINAL citations inspired by a given theme or idea.
+
+WHAT YOU DO:
+- You receive a TOPIC, IDEA, or THEME from the user.
+- You generate powerful, original CITATIONS — standalone phrases that could be attributed to a thought leader.
+- These are NOT social media posts. They are PURE CITATIONS — no intro, no context, no CTA, no commentary.
+- Think of quotes you'd see on a poster, in a book, or shared as an image.
+
+WHAT A CITATION IS:
+- A standalone memorable phrase or sentence
+- Sounds like it was said by a wise person, a leader, or a visionary
+- Self-contained — needs no explanation
+- Examples: "The best time to plant a tree was 20 years ago. The second best time is now."
+- Examples: "Move fast and break things." — Mark Zuckerberg{voice_context}{style_context}
 
 CRITICAL LANGUAGE RULE:
-Detect the language of the original quote below. Write ALL variations in THAT SAME LANGUAGE.
-- French quote → French output
-- English quote → English output
-- Arabic quote → Arabic output
-- NEVER translate. NEVER switch languages. Match the quote's language exactly.
+Detect the language of the user's input. Write ALL citations in THAT SAME LANGUAGE.
+- French input → French citations
+- English input → English citations
+- Arabic input → Arabic citations
+- NEVER switch languages.
 
-ORIGINAL QUOTE:
+USER'S INPUT (topic/theme/idea):
 "{quote}"
 
 TARGET PLATFORMS: {", ".join(platforms)}
+Generate EXACTLY one citation per platform, adapted to the platform's tone.
 
-TRANSFORMATION METHODOLOGY:
+PLATFORM-SPECIFIC TONE:
 
-STEP 1 — DECODE THE QUOTE:
-- Identify the core insight, emotion, and implicit audience
-- Find the tension, contrast, or surprise inside the message
-- Determine if it's aspirational, contrarian, educational, or emotional
+{selected_rules}
 
-STEP 2 — PLATFORM-NATIVE REWRITING:
-Each variation must feel like it was BORN on that platform, not adapted to it.
+RULES:
+✓ Each citation must be ORIGINAL — not a copy of an existing famous quote
+✓ Must be powerful, memorable, and shareable
+✓ Must relate directly to the user's topic
+✓ PURE citation only — no intro text, no "Here's a quote:", no commentary, no hashtags (unless specified)
+✓ Can include an attribution if brand signature is enabled
 
-TWITTER (max 280 chars):
-- Lead with the most powerful phrase — first 5 words decide everything
-- Use rhythm: short sentence. Shorter sentence. Punch.
-- Line breaks create visual breathing room and dramatic pacing
-- If the quote has a contrast, use "X. But Y." structure
-- End with a mic-drop line, not a generic CTA
-- Hashtags: 1-2 max, only if they add genuine discovery value
-
-LINKEDIN:
-- Open with a bold, standalone first line (this is the "see more" preview — it MUST hook)
-- Add 1-2 sentences of personal context or a "why this matters" bridge BEFORE the quote
-- Use strategic line breaks — every 1-2 sentences
-- Frame as a leadership insight or hard-won lesson, never a motivational poster
-- End with a reflective question that invites genuine discussion (not "Agree?")
-- Hashtags: 2-3 industry-relevant tags at the end
-
-MEDIUM:
-- Adopt an editorial, essay-like voice — think published columnist
-- Open with a scene, anecdote, or provocative question that leads INTO the quote
-- Expand the thought: add a "what this really means" layer
-- Use a rhetorical question or future-looking statement to close
-- No hashtags — this is long-form territory
-
-STEP 3 — QUALITY GATES (every variation must pass ALL):
-✓ Would a real human post this? (no corporate-speak, no AI-sounding filler)
-✓ Does it stop the scroll? (first line must create curiosity or emotion)
-✓ Is the original meaning preserved and amplified, not diluted?
-✓ Does it match the platform's native voice and culture?
-✓ Would someone save, share, or screenshot this?
-
-ANTI-PATTERNS — INSTANT REJECTION:
-✗ Starting with "In today's fast-paced world..." or any generic opener
-✗ Starting every variation with the same word or structure
-✗ Watering down a bold statement to sound "safer"
-✗ Adding hollow calls-to-action ("Like if you agree!", "Tag a friend!")
-✗ Using buzzwords without substance ("game-changer", "paradigm shift")
-✗ Making the quote longer without making it better
-✗ Losing the emotional core of the original message
-✗ Writing in a DIFFERENT language than the original quote — this is an instant fail
+DO NOT:
+✗ Add any text before or after the citation (no "This quote means...", no "Share this!")
+✗ Copy existing famous quotes
+✗ Write generic platitudes ("Believe in yourself!", "Follow your dreams!")
+✗ Add social media formatting (hashtags, emojis, CTAs)
 
 Brand signature enabled: {str(brand_enabled).lower()}
 If brand signature is enabled, append exactly: — @EtkanAI
 
-Return ONLY valid JSON, no markdown, no explanation:
+Return ONLY valid JSON with EXACTLY {len(platforms)} citations, no markdown, no explanation:
 [
   {{
     "platform": "Twitter",
     "tone": "the dominant emotion (e.g. bold, reflective, urgent, hopeful, defiant, vulnerable)",
-    "text": "Generated text here"
+    "text": "The citation text here — nothing else"
   }}
 ]
 """
@@ -149,7 +151,7 @@ def call_openrouter(prompt: str):
         "messages": [
             {
                 "role": "system",
-                "content": "You are a world-class social media copywriter. You transform quotes into platform-native, scroll-stopping content. Return ONLY valid JSON arrays — no markdown, no explanation, no code fences."
+                "content": "You generate original, powerful citations/quotes based on a given topic. Output PURE citations only — no social media post formatting, no commentary, no intro. Return ONLY valid JSON arrays — no markdown, no explanation, no code fences."
             },
             {
                 "role": "user",
@@ -212,6 +214,10 @@ def generate_quotes():
 
         content = ai_response["choices"][0]["message"]["content"]
         variations = parse_model_output(content)
+
+        # Filter to only selected platforms (AI may generate extras)
+        normalized_selected = [normalize_platform_name(p) for p in selected_platforms]
+        variations = [v for v in variations if v.get("platform") in normalized_selected]
 
         document = {
             "quote": quote,

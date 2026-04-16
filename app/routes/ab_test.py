@@ -95,7 +95,16 @@ def _call_ai(app, prompt, max_tokens=500):
     """Call OpenRouter AI and return the generated text."""
     api_key = app.config["OPENROUTER_API_KEY"]
     model = app.config["OPENROUTER_MODEL"]
-    system_msg = (
+    lang_enforcement = (
+        "## ABSOLUTE HIGHEST-PRIORITY RULE — LANGUAGE:\n"
+        "Detect the language of the user's content below.\n"
+        "Your ENTIRE response MUST be written in that SAME language.\n"
+        "- French input → respond 100% in French\n"
+        "- English input → respond 100% in English\n"
+        "- Arabic input → respond 100% in Arabic\n"
+        "NEVER mix languages. NEVER switch to English.\n\n"
+    )
+    system_msg = lang_enforcement + (
         "You are a viral social media writer. You write like a real human — opinionated, "
         "specific, and conversational. You never sound like AI. Your posts get high engagement "
         "because they feel authentic, have strong hooks, and make people want to respond. "
@@ -298,7 +307,7 @@ def run_ab_test(test_id):
     doc = _col().find_one({"_id": ObjectId(test_id), "user_id": user_id})
     if not doc:
         return jsonify({"message": "Test not found"}), 404
-    if doc["status"] not in ("ready",):
+    if doc["status"] not in ("ready", "paused"):
         return jsonify({"message": "Test is not in a runnable state"}), 400
 
     # Mark as running immediately

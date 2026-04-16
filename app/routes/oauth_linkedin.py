@@ -25,7 +25,7 @@ def start():
         "response_type": "code",
         "client_id": client_id,
         "redirect_uri": redirect_uri,
-        "scope": "openid profile email",
+        "scope": "openid profile email w_member_social",
         # ✅ décommente si tu veux forcer l'écran login à chaque fois
         # "prompt": "login",
     }
@@ -76,9 +76,11 @@ def callback():
         print("Token error:", token_response.text)
         return redirect(f"{frontend_url}/login?oauth_error=token_error")
 
-    access_token_li = token_response.json().get("access_token")
+    token_data = token_response.json()
+    access_token_li = token_data.get("access_token")
+    expires_in = token_data.get("expires_in", 5184000)  # default 60 days
     if not access_token_li:
-        print("No access_token in token response:", token_response.json())
+        print("No access_token in token response:", token_data)
         return redirect(f"{frontend_url}/login?oauth_error=no_access_token")
 
     # 4) récupérer user info
@@ -119,6 +121,8 @@ def callback():
                 "locale": userinfo.get("locale"),
                 "linkedin_data": userinfo,
                 "oauth_provider": "linkedin",
+                "linkedin_access_token": access_token_li,
+                "linkedin_token_expires_at": datetime.utcnow() + timedelta(seconds=expires_in),
                 "updated_at": datetime.utcnow()
             }
             result = collection.update_one(
@@ -138,6 +142,8 @@ def callback():
                 "locale": userinfo.get("locale"),
                 "linkedin_data": userinfo,
                 "oauth_provider": "linkedin",
+                "linkedin_access_token": access_token_li,
+                "linkedin_token_expires_at": datetime.utcnow() + timedelta(seconds=expires_in),
                 "role": "FREE",
                 "created_at": datetime.utcnow(),
                 "updated_at": datetime.utcnow()

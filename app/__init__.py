@@ -63,13 +63,9 @@ def create_app():
 
     @app.before_request
     def log_request():
-        print(f"Incoming request: {request.method} {request.url}")
-        print(f"Headers: {dict(request.headers)}")
-        if request.method in ['POST', 'PUT', 'PATCH'] and request.is_json:
-            try:
-                print(f"Body: {request.get_json()}")
-            except:
-                pass
+        # Only log non-GET requests to reduce noise
+        if request.method not in ('GET', 'OPTIONS', 'HEAD'):
+            print(f"Incoming request: {request.method} {request.url}")
 
     # Initialisation SQLAlchemy + JWT
     db.init_app(app)
@@ -118,6 +114,17 @@ def create_app():
     except Exception as e:
         print(f"[WARN] Could not initialize guest user: {e}")
 
+    # Create MongoDB indexes for faster queries
+    try:
+        app.mongo["posts"].create_index([("user_id", 1), ("status", 1)])
+        app.mongo["posts"].create_index([("user_id", 1), ("created_at", -1)])
+        app.mongo["posts"].create_index([("status", 1), ("schedule_date", 1)])
+        app.mongo["users"].create_index("email", unique=True)
+        app.mongo["user_settings"].create_index("user_id", unique=True)
+        print("[OK] MongoDB indexes created")
+    except Exception as e:
+        print(f"[WARN] Index creation: {e}")
+
     # OpenRouter client
     openrouter_client = OpenAI(
         base_url="https://openrouter.ai/api/v1",
@@ -144,7 +151,7 @@ def create_app():
     from .routes.ai_ideas import ai_ideas_bp
     from .routes.ai_generate import ai_generate_bp
     from .routes.clone import clone_bp
-    from .routes.ab_tests import ab_tests_bp
+    from .routes.ab_test import ab_test_bp
 
     # Register all blueprints in organized manner
     app.register_blueprint(oauth_linkedin_bp)
@@ -165,12 +172,16 @@ def create_app():
     app.register_blueprint(ai_ideas_bp, url_prefix="/api/ai-ideas")
     app.register_blueprint(ai_generate_bp, url_prefix="/api/ai/generate")
     app.register_blueprint(clone_bp, url_prefix="/api/clone")
-    app.register_blueprint(ab_tests_bp, url_prefix="/api/ab-tests")
+    app.register_blueprint(ab_test_bp)
 
     # Route health
     @app.get("/api/health")
     def health():
         return {"status": "ok", "message": "AutoPoster Backend Running"}
+
+    # Start auto-publish scheduler
+    from .scheduler import start_scheduler
+    start_scheduler(app)
 
     # 🔹 ROUTE IA
     @app.post("/api/ai/chat")

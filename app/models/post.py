@@ -11,6 +11,7 @@ class Post:
                  schedule_date=None, schedule_time=None, engagement=None,
                  content_type=None, content_type_confidence=None,
                  selected_images=None, idea=None,
+                 published_at=None,
                  created_at=None, updated_at=None, _id=None):
         self._id = _id or ObjectId()
         self.user_id = user_id
@@ -24,6 +25,7 @@ class Post:
         self.content_type = content_type
         self.content_type_confidence = content_type_confidence
         self.selected_images = selected_images or []
+        self.published_at = published_at
         self.created_at = created_at or datetime.utcnow()
         self.updated_at = updated_at or datetime.utcnow()
 
@@ -42,6 +44,7 @@ class Post:
             "content_type_confidence": self.content_type_confidence,
             "selectedImages": self.selected_images,
             "idea": self.idea,
+            "published_at": self.published_at.isoformat() if self.published_at else None,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None
         }
@@ -62,6 +65,7 @@ class Post:
             content_type_confidence=data.get("content_type_confidence"),
             selected_images=data.get("selectedImages", []),
             idea=data.get("idea"),
+            published_at=data.get("published_at"),
             created_at=data.get("created_at"),
             updated_at=data.get("updated_at"),
         )

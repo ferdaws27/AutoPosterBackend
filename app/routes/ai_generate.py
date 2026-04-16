@@ -1,10 +1,48 @@
 import json
 import re
+import unicodedata
 
 import requests
 from flask import Blueprint, current_app, jsonify, request
 
 ai_generate_bp = Blueprint("ai_generate", __name__)
+
+
+def detect_language(text):
+    """Detect language from text using character/word analysis."""
+    if not text:
+        return "English"
+
+    # Check for Arabic characters
+    arabic_count = sum(1 for c in text if '\u0600' <= c <= '\u06FF' or '\u0750' <= c <= '\u077F' or '\uFB50' <= c <= '\uFDFF' or '\uFE70' <= c <= '\uFEFF')
+    if arabic_count > len(text) * 0.1:
+        return "Arabic"
+
+    # Check for French indicators
+    french_chars = sum(1 for c in text if c in 'àâäéèêëïîôùûüçœæÀÂÄÉÈÊËÏÎÔÙÛÜÇŒÆ')
+    french_words = ['les', 'des', 'une', 'est', 'dans', 'pour', 'sur', 'avec', 'qui', 'que',
+                    'pas', 'sont', 'mais', 'aussi', 'cette', 'tout', 'fait', 'comme', 'nous',
+                    'leur', 'entre', 'très', 'être', 'avoir', 'faire', 'peut', 'plus', 'bien',
+                    'comment', 'pourquoi', 'quand', 'où', 'donc', 'alors', 'parce']
+    words = re.findall(r'\b\w+\b', text.lower())
+    french_word_count = sum(1 for w in words if w in french_words)
+    if french_chars > 0 or (len(words) > 3 and french_word_count >= 2):
+        return "French"
+
+    # Check for Spanish
+    spanish_chars = sum(1 for c in text if c in 'ñáéíóúüÑÁÉÍÓÚÜ¿¡')
+    spanish_words = ['los', 'las', 'una', 'del', 'que', 'por', 'con', 'para', 'como', 'pero', 'más', 'esta', 'esto']
+    spanish_word_count = sum(1 for w in words if w in spanish_words)
+    if spanish_chars > 0 or (len(words) > 3 and spanish_word_count >= 2):
+        return "Spanish"
+
+    # Check for German
+    german_words = ['der', 'die', 'das', 'und', 'ist', 'ein', 'eine', 'für', 'mit', 'auf', 'nicht', 'sich', 'auch', 'über']
+    german_word_count = sum(1 for w in words if w in german_words)
+    if len(words) > 3 and german_word_count >= 2:
+        return "German"
+
+    return "English"
 
 
 @ai_generate_bp.route("/", methods=["POST"])
@@ -23,10 +61,31 @@ def generate():
         model = data.get("model", current_app.config["OPENROUTER_MODEL"])
         temperature = float(data.get("temperature", 0.7))
         max_tokens = int(data.get("max_tokens", 500))
+        system_msg = data.get("system", "")
+        # user_content = the raw user text (idea/post), NOT the full prompt with instructions
+        user_content = data.get("user_content", "")
 
         api_key = current_app.config["OPENROUTER_API_KEY"]
         if not api_key:
             return jsonify({"success": False, "error": "OpenRouter API key not configured on server"}), 500
+
+        # Use explicit language from frontend settings if provided, otherwise auto-detect
+        explicit_lang = data.get("language", "")
+        lang_map = {"fr": "French", "en": "English", "es": "Spanish", "de": "German", "ar": "Arabic", "it": "Italian", "pt": "Portuguese"}
+        if explicit_lang and explicit_lang in lang_map:
+            detected_lang = lang_map[explicit_lang]
+        else:
+            detected_lang = detect_language(user_content) if user_content else detect_language(prompt)
+        current_app.logger.info(f"Language: {detected_lang} (explicit={explicit_lang}, from: {(user_content or prompt)[:80]}...)")
+
+        # Build messages — enforce detected language
+        messages = []
+        lang_rule = f"You MUST write your ENTIRE response in {detected_lang}. Every word — titles, body, hashtags, CTAs, questions — must be in {detected_lang}. Do NOT use any other language."
+        if system_msg:
+            messages.append({"role": "system", "content": lang_rule + "\n\n" + system_msg})
+        else:
+            messages.append({"role": "system", "content": lang_rule})
+        messages.append({"role": "user", "content": prompt})
 
         response = requests.post(
             "https://openrouter.ai/api/v1/chat/completions",
@@ -38,7 +97,7 @@ def generate():
             },
             json={
                 "model": model,
-                "messages": [{"role": "user", "content": prompt}],
+                "messages": messages,
                 "temperature": temperature,
                 "max_tokens": max_tokens,
             },

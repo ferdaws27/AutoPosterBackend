@@ -74,3 +74,59 @@ def save_settings():
     )
 
     return jsonify({"success": True, "message": "Settings saved"}), 200
+
+
+@settings_bp.route("/linkedin-profile-url", methods=["GET", "POST", "OPTIONS"])
+@jwt_required()
+def linkedin_profile_url():
+    if request.method == "OPTIONS":
+        return "", 200
+
+    user_id = get_jwt_identity()
+    users_collection = current_app.mongo["users"]
+
+    if request.method == "GET":
+        user = users_collection.find_one({"email": user_id}, {"linkedin_profile_url": 1})
+        return jsonify({"success": True, "linkedin_profile_url": (user or {}).get("linkedin_profile_url", "")})
+
+    # POST
+    data = request.get_json()
+    url = (data.get("linkedin_profile_url") or "").strip()
+
+    # Basic validation
+    if url and not url.startswith("https://www.linkedin.com/in/"):
+        return jsonify({"success": False, "error": "URL must start with https://www.linkedin.com/in/"}), 400
+
+    users_collection.update_one(
+        {"email": user_id},
+        {"$set": {"linkedin_profile_url": url, "updated_at": datetime.utcnow()}}
+    )
+    return jsonify({"success": True, "message": "LinkedIn profile URL saved"})
+
+
+@settings_bp.route("/auto-post", methods=["GET", "POST", "OPTIONS"])
+@jwt_required()
+def auto_post_settings():
+    if request.method == "OPTIONS":
+        return "", 200
+
+    user_id = get_jwt_identity()
+    users_collection = current_app.mongo["users"]
+
+    if request.method == "GET":
+        user = users_collection.find_one({"email": user_id}, {"auto_post": 1})
+        return jsonify({"success": True, "auto_post": (user or {}).get("auto_post", {})})
+
+    # POST
+    data = request.get_json()
+    auto_post = {
+        "linkedin": bool(data.get("linkedin", False)),
+        "twitter": bool(data.get("twitter", False)),
+        "medium": bool(data.get("medium", False)),
+    }
+
+    users_collection.update_one(
+        {"email": user_id},
+        {"$set": {"auto_post": auto_post, "updated_at": datetime.utcnow()}}
+    )
+    return jsonify({"success": True, "message": "Auto-post settings saved"})
