@@ -1735,7 +1735,24 @@ def get_analytics():
 
         # Use stored platforms, or derive from interaction data
         post_platforms = post.get("platforms", {})
-        if not post_platforms or not any(post_platforms.values()):
+        if post_platforms:
+            # Handle case where platforms might be a list instead of dict
+            if isinstance(post_platforms, list):
+                if not post_platforms:  # empty list
+                    interaction_plats = post_platforms_from_interactions.get(pid, set())
+                    if interaction_plats:
+                        post_platforms = {plat: True for plat in interaction_plats}
+                else:
+                    # Convert list to dict format
+                    post_platforms = {plat: True for plat in post_platforms}
+            else:
+                # It's a dict, check if any values are truthy
+                if not any(post_platforms.values()):
+                    interaction_plats = post_platforms_from_interactions.get(pid, set())
+                    if interaction_plats:
+                        post_platforms = {plat: True for plat in interaction_plats}
+        else:
+            # No platforms, try to derive from interactions
             interaction_plats = post_platforms_from_interactions.get(pid, set())
             if interaction_plats:
                 post_platforms = {plat: True for plat in interaction_plats}
@@ -1758,7 +1775,11 @@ def get_analytics():
 # -------------------------------
 def _detect_media_type(post):
     """Detect media type from post document: image, video, text, or poll."""
-    content = (post.get("content") or "").lower()
+    content = post.get("content", "")
+    # Handle case where content is a dict (from AI generation results)
+    if isinstance(content, dict):
+        content = content.get("title", "") or content.get("text", "") or ""
+    content = str(content).lower()
 
     # Check if post has images attached
     images = post.get("selectedImages") or post.get("images") or post.get("media")
@@ -2103,6 +2124,10 @@ def reputation_score():
     clarity_scores = []
     for p in posts:
         content = (p.get("content") or "")
+        # Handle case where content is a dict (from AI generation results)
+        if isinstance(content, dict):
+            content = content.get("title", "") or content.get("text", "") or ""
+        content = str(content)
         score = 0
         # Length bonus (200+ chars = max 30pts)
         score += min(30, len(content) / 7)
@@ -2197,7 +2222,7 @@ def reputation_score():
             "shares": shares,
             "total": len(inters),
             "score": min(100, round((weighted / 200) * 100)),
-            "content_preview": (p.get("content") or "")[:60],
+            "content_preview": str(p.get("content") or "")[:60],
             "content_type": p.get("content_type", "unclassified")
         })
 
@@ -2213,7 +2238,7 @@ def reputation_score():
         shares   = sum(1 for x in inters if x.get("type") == "share")
         post_details.append({
             "post_id": pid,
-            "content_preview": (p.get("content") or "")[:80],
+            "content_preview": str(p.get("content") or "")[:80],
             "content_type": p.get("content_type", "unclassified"),
             "likes": likes,
             "comments": comments,
@@ -2226,8 +2251,8 @@ def reputation_score():
     # ══════════════════════════════════════
     # PERSONALISED ADVICE (AI-generated)
     # ══════════════════════════════════════
-    posts_without_hashtags = sum(1 for p in posts if "#" not in (p.get("content") or ""))
-    posts_without_cta = sum(1 for p in posts if "?" not in (p.get("content") or ""))
+    posts_without_hashtags = sum(1 for p in posts if "#" not in str(p.get("content") or ""))
+    posts_without_cta = sum(1 for p in posts if "?" not in str(p.get("content") or ""))
 
     scores_summary = (
         f"Overall reputation score: {overall}/100\n"
@@ -2729,9 +2754,15 @@ def analytics_ai_insights():
         # Check platforms from post document
         plats = post.get("platforms", {})
         if plats:
-            for p, enabled in plats.items():
-                if enabled:
-                    platform_post_count[p] += 1
+            # Handle case where platforms might be a list instead of dict
+            if isinstance(plats, list):
+                for p in plats:
+                    if p:  # truthy value means enabled
+                        platform_post_count[p] += 1
+            else:
+                for p, enabled in plats.items():
+                    if enabled:
+                        platform_post_count[p] += 1
 
     # Also count from interaction-derived platforms
     for pid, plats in post_platforms_map.items():

@@ -17,49 +17,24 @@ def create_app():
     app.config.from_object(Config)
 
     # CORS pour le frontend React
-    cors_config = {
-        "origins": [
-            os.getenv("FRONTEND_URL", "http://localhost:5173"),
-            "http://127.0.0.1:5173",
+    CORS(app, 
+        origins=[
             "http://localhost:5173",
+            "http://127.0.0.1:5173", 
+            "http://localhost:5174",
+            "http://127.0.0.1:5174",
+            "http://localhost:5175",
+            "http://127.0.0.1:5175",
+            "http://localhost:5176",
+            "http://127.0.0.1:5176"
         ],
-        "allow_headers": ["Content-Type", "Authorization"],
-        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        "supports_credentials": True,
-    }
-    CORS(
-        app,
-        resources={
-            r"/api/*": {
-                "origins": [
-                    os.getenv("FRONTEND_URL", "http://localhost:5173"),
-                    "http://127.0.0.1:5173",
-                    "http://localhost:5173",
-                    "http://localhost:5174",
-                    "http://localhost:5175",
-                    "http://localhost:5176",
-                ],
-                "allow_headers": ["Content-Type", "Authorization"],
-                "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-                "supports_credentials": True,
-            },
-            r"/*": {
-                "origins": [
-                    os.getenv("FRONTEND_URL", "http://localhost:5173"),
-                    "http://127.0.0.1:5173",
-                    "http://localhost:5173",
-                    "http://localhost:5174",
-                    "http://localhost:5175",
-                    "http://localhost:5176",
-                ],
-                "allow_headers": ["Content-Type", "Authorization"],
-                "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-                "supports_credentials": True,
-            },
-        },
+        allow_headers=["Content-Type", "Authorization"],
+        methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        supports_credentials=True
     )
 
     print("DATABASE_URL =", os.getenv("DATABASE_URL"))
+    print("CORS configuration updated for analytics endpoints")
 
     @app.before_request
     def log_request():
