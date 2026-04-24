@@ -106,16 +106,14 @@ RULES:
 ✓ Must be powerful, memorable, and shareable
 ✓ Must relate directly to the user's topic
 ✓ PURE citation only — no intro text, no "Here's a quote:", no commentary, no hashtags (unless specified)
-✓ Can include an attribution if brand signature is enabled
+✓ NO brand signature or attribution should be appended unless explicitly requested
 
 DO NOT:
 ✗ Add any text before or after the citation (no "This quote means...", no "Share this!")
+✗ Add brand signatures like "— @EtkanAI" unless explicitly enabled
 ✗ Copy existing famous quotes
 ✗ Write generic platitudes ("Believe in yourself!", "Follow your dreams!")
 ✗ Add social media formatting (hashtags, emojis, CTAs)
-
-Brand signature enabled: {str(brand_enabled).lower()}
-If brand signature is enabled, append exactly: — @EtkanAI
 
 Return ONLY valid JSON with EXACTLY {len(platforms)} citations, no markdown, no explanation:
 [
@@ -218,6 +216,13 @@ def generate_quotes():
         # Filter to only selected platforms (AI may generate extras)
         normalized_selected = [normalize_platform_name(p) for p in selected_platforms]
         variations = [v for v in variations if v.get("platform") in normalized_selected]
+
+        # Remove brand signature if not enabled
+        if not brand_enabled:
+            for variation in variations:
+                if "text" in variation:
+                    # Remove @EtkanAI or similar brand signatures
+                    variation["text"] = variation["text"].replace(" — @EtkanAI", "").replace("— @EtkanAI", "").replace(" —@EtkanAI", "").replace("—@EtkanAI", "").strip()
 
         document = {
             "quote": quote,
