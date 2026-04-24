@@ -96,6 +96,7 @@ def create_app():
         app.mongo["posts"].create_index([("status", 1), ("schedule_date", 1)])
         app.mongo["users"].create_index("email", unique=True)
         app.mongo["user_settings"].create_index("user_id", unique=True)
+        app.mongo["saved_carousels"].create_index([("userId", 1), ("createdAt", -1)])
         print("[OK] MongoDB indexes created")
     except Exception as e:
         print(f"[WARN] Index creation: {e}")
@@ -143,6 +144,10 @@ def create_app():
     app.register_blueprint(settings_bp)
     app.register_blueprint(images_bp)
     app.register_blueprint(media_bp)
+    print("Media blueprint registered. Available routes:")
+    for rule in app.url_map.iter_rules():
+        if 'media' in rule.rule:
+            print(f"  {rule.rule} -> {rule.endpoint}")
     app.register_blueprint(video_builder_bp)
     app.register_blueprint(ai_ideas_bp, url_prefix="/api/ai-ideas")
     app.register_blueprint(ai_generate_bp, url_prefix="/api/ai/generate")

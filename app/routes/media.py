@@ -1,8 +1,10 @@
-from flask import Blueprint, request, jsonify
-from flask_jwt_extended import jwt_required
+from flask import Blueprint, request, jsonify, current_app
+from flask_jwt_extended import jwt_required, get_jwt_identity
 import requests as http_requests
 import json
 import os
+from datetime import datetime
+from bson.objectid import ObjectId
 
 media_bp = Blueprint("media_bp", __name__, url_prefix="/api/media")
 
@@ -186,6 +188,169 @@ Return ONLY valid JSON (no markdown, no code blocks) in this exact format:
             "error": "AI returned invalid JSON. Please try again.",
             "raw": raw_text[:500] if 'raw_text' in dir() else None
         }), 500
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+@media_bp.get("/test")
+def test_endpoint():
+    """Test endpoint to verify media_bp is loaded."""
+    return jsonify({
+        "success": True,
+        "message": "Media blueprint is working",
+        "timestamp": datetime.utcnow().isoformat()
+    })
+
+@media_bp.post("/save-carousel")
+@jwt_required()
+def save_carousel():
+    """Save carousel to MongoDB."""
+    try:
+        print("=== SAVE CAROUSEL ENDPOINT CALLED ===")
+        data = request.get_json()
+        print(f"Received data keys: {data.keys() if data else 'No data'}")
+        
+        # Get user ID from JWT
+        user_id = get_jwt_identity()
+        print(f"User ID from JWT: {user_id}")
+        
+        # If user is guest, try to get real user from database
+        if user_id == "guest" or not user_id:
+            print("Guest user detected, trying to get real user ID...")
+            # Try to get user from JWT token or session
+            auth_header = request.headers.get('Authorization')
+            if auth_header and auth_header.startswith('Bearer '):
+                token = auth_header.split(' ')[1]
+                # You could decode the token here to get the real user ID
+                # For now, we'll use the guest ID
+                user_id = "guest"
+        
+        # Try to get MongoDB connection
+        try:
+            saved_carousels = current_app.mongo["saved_carousels"]
+            print(f"MongoDB collection accessed successfully")
+        except Exception as mongo_err:
+            print(f"MongoDB access error: {mongo_err}")
+            return jsonify({
+                "success": False,
+                "error": f"MongoDB access failed: {str(mongo_err)}"
+            }), 500
+        
+        carousel_data = {
+            "title": data.get("title", "Untitled Carousel"),
+            "slides": data.get("slides", []),
+            "slideImages": data.get("slideImages", []),
+            "image": data.get("image", ""),
+            "createdAt": datetime.utcnow(),
+            "userId": user_id,
+            "userEmail": None  # Will be populated if we have user info
+        }
+        
+        # Try to get user email if user_id is not guest
+        if user_id and user_id != "guest":
+            try:
+                from bson.objectid import ObjectId
+                user = current_app.mongo["users"].find_one({"_id": ObjectId(user_id)})
+                if user:
+                    carousel_data["userEmail"] = user.get("email")
+            except:
+                pass
+        
+        print(f"Carousel data to save: {carousel_data}")
+        
+        # Insert into MongoDB
+        result = saved_carousels.insert_one(carousel_data)
+        print(f"Insert result: {result}")
+        print(f"Inserted ID: {result.inserted_id}")
+        
+        print("=== CAROUSEL SAVED SUCCESSFULLY ===")
+        return jsonify({
+            "success": True,
+            "message": "Carousel saved successfully",
+            "carouselId": str(result.inserted_id)
+        }), 201
+        
+    except Exception as e:
+        print(f"=== ERROR SAVING CAROUSEL: {e} ===")
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+@media_bp.get("/saved-carousels")
+@jwt_required()
+def get_saved_carousels():
+    """Get user's saved carousels from MongoDB."""
+    try:
+        # Use app's MongoDB connection
+        saved_carousels = current_app.mongo["saved_carousels"]
+        user_id = get_jwt_identity()
+        carousels = list(saved_carousels.find(
+            {"userId": user_id}
+        ).sort("createdAt", -1).limit(10))
+        
+        # Convert ObjectId to string for JSON serialization
+        for carousel in carousels:
+            carousel["_id"] = str(carousel["_id"])
+            del carousel["userId"]  # Don't return user ID to frontend
+            
+        return jsonify({
+            "success": True,
+            "carousels": carousels
+        }), 200
+        
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+@media_bp.delete("/saved-carousels/<carousel_id>")
+@jwt_required()
+def delete_saved_carousel(carousel_id):
+    """Delete saved carousel from MongoDB."""
+    try:
+        print(f"=== DELETE CAROUSEL CALLED ===")
+        print(f"Carousel ID: {carousel_id}")
+        
+        # Use app's MongoDB connection
+        saved_carousels = current_app.mongo["saved_carousels"]
+        user_id = get_jwt_identity()
+        print(f"User ID: {user_id}")
+        
+        # First check if carousel exists
+        try:
+            carousel = saved_carousels.find_one({"_id": ObjectId(carousel_id)})
+            print(f"Carousel found: {carousel is not None}")
+            if carousel:
+                print(f"Carousel userId: {carousel.get('userId')}")
+        except Exception as e:
+            print(f"Error finding carousel: {e}")
+        
+        result = saved_carousels.delete_one({
+            "_id": ObjectId(carousel_id),
+            "userId": user_id
+        })
+        
+        print(f"Deleted count: {result.deleted_count}")
+        
+        if result.deleted_count == 0:
+            print("Carousel not found or user ID mismatch")
+            return jsonify({
+                "success": False,
+                "error": "Carousel not found"
+            }), 404
+            
+        print("✓ Carousel deleted successfully")
+        return jsonify({
+            "success": True,
+            "message": "Carousel deleted successfully"
+        }), 200
+        
     except Exception as e:
         return jsonify({
             "success": False,

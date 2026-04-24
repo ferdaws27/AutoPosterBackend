@@ -328,6 +328,7 @@ def save_template():
         quote = data.get("quote", "").strip()
         variation = data.get("variation")
         name = data.get("name", "").strip()
+        all_variations = data.get("allVariations", [])
 
         if not quote or not variation:
             return jsonify({"error": "quote and variation are required"}), 400
@@ -336,6 +337,7 @@ def save_template():
             "name": name or quote[:50],
             "quote": quote,
             "variation": variation,
+            "allVariations": all_variations,  # Save all generated variations
             "createdAt": datetime.utcnow(),
         }
         result = current_app.mongo.quote_templates.insert_one(doc)
@@ -362,6 +364,7 @@ def get_templates():
                 "name": item.get("name", ""),
                 "quote": item.get("quote", ""),
                 "variation": item.get("variation", {}),
+                "allVariations": item.get("allVariations", []),  # Include all variations
                 "createdAt": item["createdAt"].isoformat() if item.get("createdAt") else None,
             })
         return jsonify({"success": True, "templates": templates}), 200
