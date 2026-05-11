@@ -1,6 +1,6 @@
 from flask import Blueprint, current_app, redirect, request, jsonify, session
 import requests
-from flask_jwt_extended import create_access_token
+from flask_jwt_extended import create_access_token, decode_token
 from urllib.parse import urlencode, quote
 from datetime import datetime, timedelta
 import secrets
@@ -26,6 +26,20 @@ def start():
     # CSRF state
     state = secrets.token_urlsafe(32)
     session["medium_oauth_state"] = state
+
+    # Handle account linking
+    link_token = request.args.get("link_token")
+    link_user_id = None
+    if link_token:
+        try:
+            decoded = decode_token(link_token)
+            link_identity = decoded.get("sub") or decoded.get("identity")
+            if link_identity:
+                link_user_id = link_identity
+                session["oauth_linking_user_id"] = link_user_id
+                print(f"Linking OAuth to user: {link_user_id}")
+        except Exception as e:
+            print("Invalid Medium link_token:", str(e))
 
     params = {
         "client_id": client_id,
@@ -108,25 +122,81 @@ def callback():
     # Save / update in MongoDB
     try:
         collection = current_app.mongo["users"]
-        existing = collection.find_one({"medium_id": medium_id})
+        link_user_id = session.pop("oauth_linking_user_id", None)
+        link_user_doc = None
 
-        user_data = {
-            "medium_id": medium_id,
+        if link_user_id:
+            try:
+                from bson.objectid import ObjectId
+                link_user_doc = collection.find_one({"_id": ObjectId(link_user_id)})
+            except Exception as e:
+                print("Invalid Medium link user id:", str(e))
+
+        provider_owner = collection.find_one({
+            "social_accounts": {
+                "$elemMatch": {
+                    "provider": "medium",
+                    "provider_user_id": medium_id
+                }
+            }
+        })
+        if provider_owner:
+            existing = provider_owner
+        elif link_user_doc:
+            existing = link_user_doc
+        else:
+            existing = None
+
+        account_data = {
+            "provider": "medium",
+            "provider_user_id": medium_id,
             "username": username,
             "name": name,
             "profile_picture": image_url,
-            "oauth_provider": "medium",
-            "medium_access_token": access_token,
+            "profile": userinfo,
+            "access_token": access_token,
             "updated_at": datetime.utcnow(),
         }
 
         if existing:
-            collection.update_one({"medium_id": medium_id}, {"$set": user_data})
+            if not existing.get("oauth_provider"):
+                account_data["oauth_provider"] = "medium"
+
+            existing_accounts = existing.get("social_accounts", [])
+            medium_account = next((a for a in existing_accounts if a.get("provider") == "medium"), None)
+            if medium_account:
+                collection.update_one(
+                    {"_id": existing["_id"], "social_accounts.provider": "medium"},
+                    {"$set": {"social_accounts.$": account_data, "updated_at": datetime.utcnow()}}
+                )
+            else:
+                collection.update_one(
+                    {"_id": existing["_id"]},
+                    {"$push": {"social_accounts": account_data}, "$set": {"updated_at": datetime.utcnow()}}
+                )
+
+            if not existing.get("medium_id"):
+                collection.update_one(
+                    {"_id": existing["_id"]},
+                    {"$set": {"medium_id": medium_id, "oauth_provider": existing.get("oauth_provider", "medium"), "updated_at": datetime.utcnow()}}
+                )
             user_id = str(existing["_id"])
         else:
-            user_data["role"] = "FREE"
-            user_data["created_at"] = datetime.utcnow()
-            result = collection.insert_one(user_data)
+            new_user = {
+                "email": None,
+                "password": None,
+                "medium_id": medium_id,
+                "username": username,
+                "name": name,
+                "profile_picture": image_url,
+                "medium_access_token": access_token,
+                "oauth_provider": "medium",
+                "social_accounts": [account_data],
+                "role": "FREE",
+                "created_at": datetime.utcnow(),
+                "updated_at": datetime.utcnow()
+            }
+            result = collection.insert_one(new_user)
             user_id = str(result.inserted_id)
 
     except Exception as e:

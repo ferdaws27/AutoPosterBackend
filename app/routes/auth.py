@@ -173,12 +173,26 @@ def me():
         if not user_doc:
             return jsonify({"success": False, "error": "User not found"}), 404
 
+        social_accounts = user_doc.get("social_accounts", []) or []
+        safe_social_accounts = []
+        for account in social_accounts:
+            safe_social_accounts.append({
+                "provider": account.get("provider"),
+                "provider_user_id": account.get("provider_user_id"),
+                "username": account.get("username"),
+                "name": account.get("name"),
+                "profile_picture": account.get("profile_picture"),
+                "locale": account.get("locale"),
+            })
         return jsonify({
             "success": True,
             "user": {
                 "id": str(user_doc["_id"]),
                 "email": user_doc.get("email"),
                 "username": user_doc.get("username"),
+                "twitter_id": user_doc.get("twitter_id"),
+                "linkedin_id": user_doc.get("linkedin_id"),
+                "medium_id": user_doc.get("medium_id"),
                 "first_name": user_doc.get("first_name"),
                 "last_name": user_doc.get("last_name"),
                 "full_name": f"{user_doc.get('first_name') or ''} {user_doc.get('last_name') or ''}".strip() or user_doc.get("username") or user_doc.get("email"),
@@ -189,6 +203,7 @@ def me():
                 "following": user_doc.get("following"),
                 "role": user_doc.get("role", "FREE"),
                 "oauth_provider": user_doc.get("oauth_provider"),
+                "social_accounts": safe_social_accounts,
             }
         }), 200
 

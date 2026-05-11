@@ -103,11 +103,32 @@ Only return valid JSON, no markdown."""
             print(f"[CONTENT-TYPE] Error for post {post_id}: {e}")
 
 
-def _find_post(collection, post_id, user_id=None):
-    """Find a post by _id, trying both string and ObjectId formats."""
+def _get_user_id_variants(app, user_id):
+    """Get both ObjectId and email for a user (for backward compatibility)."""
+    variants = [user_id]
+    try:
+        user_doc = app.mongo["users"].find_one({"_id": ObjectId(user_id)})
+        if user_doc and user_doc.get("email"):
+            variants.append(user_doc["email"])
+    except Exception:
+        pass
+    return variants
+
+
+def _find_post(collection, post_id, user_id=None, app=None):
+    """Find a post by _id, trying both string and ObjectId formats.
+    If user_id provided, filter by user (handles both ObjectId and email for backward compat)."""
+    
+    user_variants = None
+    if user_id and app:
+        user_variants = _get_user_id_variants(app, user_id)
+    elif user_id:
+        user_variants = [user_id]
+    
+    # Try string _id first
     query = {"_id": post_id}
-    if user_id:
-        query["user_id"] = user_id
+    if user_variants:
+        query["user_id"] = {"$in": user_variants}
     doc = collection.find_one(query)
     if doc:
         return doc, post_id
@@ -116,8 +137,8 @@ def _find_post(collection, post_id, user_id=None):
     try:
         oid = ObjectId(post_id)
         query_oid = {"_id": oid}
-        if user_id:
-            query_oid["user_id"] = user_id
+        if user_variants:
+            query_oid["user_id"] = {"$in": user_variants}
         doc = collection.find_one(query_oid)
         if doc:
             return doc, oid
@@ -139,11 +160,25 @@ def get_posts():
 
         status = request.args.get("status")
         platform = request.args.get("platform")
-        limit = int(request.args.get("limit", 50))
+        limit = int(request.args.get("limit", 500))
         offset = int(request.args.get("offset", 0))
 
-        # Filter by user_id - ONLY this user's posts
-        query = {"user_id": user_id}
+        # Build query: filter by user_id (ObjectId) OR find user by ObjectId to get their email
+        # This handles both new posts (user_id = ObjectId) and old posts (user_id = email)
+        user_email = None
+        try:
+            user_doc = mongo["users"].find_one({"_id": ObjectId(user_id)})
+            if user_doc:
+                user_email = user_doc.get("email")
+        except Exception:
+            pass
+
+        # Build OR query to find posts by either ObjectId or email (for backward compat)
+        user_query = [{"user_id": user_id}]
+        if user_email:
+            user_query.append({"user_id": user_email})
+        
+        query = {"$or": user_query}
 
         if status:
             query["status"] = status
@@ -157,8 +192,9 @@ def get_posts():
         now = datetime.utcnow()
         today_str = now.strftime("%Y-%m-%d")
         now_time = now.strftime("%H:%M")
+        # Use same user_query for backward compat
         overdue_query = {
-            "user_id": user_id,
+            "$or": user_query,
             "status": "scheduled",
             "schedule_date": {"$lte": today_str},
         }
@@ -324,7 +360,7 @@ def get_post(post_id):
         mongo = current_app.mongo
         posts_collection = mongo[Post.collection_name]
 
-        post_doc, _ = _find_post(posts_collection, post_id, user_id)
+        post_doc, _ = _find_post(posts_collection, post_id, user_id, current_app._get_current_object())
 
         if not post_doc:
             return jsonify({
@@ -359,7 +395,7 @@ def update_post(post_id):
         posts_collection = mongo[Post.collection_name]
 
         # Find post with string or ObjectId
-        post_doc, actual_id = _find_post(posts_collection, post_id, user_id)
+        post_doc, actual_id = _find_post(posts_collection, post_id, user_id, current_app._get_current_object())
 
         if not post_doc:
             return jsonify({
@@ -416,7 +452,7 @@ def delete_post(post_id):
         mongo = current_app.mongo
         posts_collection = mongo[Post.collection_name]
 
-        post_doc, actual_id = _find_post(posts_collection, post_id, user_id)
+        post_doc, actual_id = _find_post(posts_collection, post_id, user_id, current_app._get_current_object())
 
         if not post_doc:
             return jsonify({
@@ -455,7 +491,7 @@ def duplicate_post(post_id):
         mongo = current_app.mongo
         posts_collection = mongo[Post.collection_name]
 
-        original, _ = _find_post(posts_collection, post_id, user_id)
+        original, _ = _find_post(posts_collection, post_id, user_id, current_app._get_current_object())
 
         if not original:
             return jsonify({
@@ -500,9 +536,22 @@ def get_posts_stats():
         mongo = current_app.mongo
         posts_collection = mongo[Post.collection_name]
 
-        # Filter by user_id - only get this user's stats
+        # Get user email for backward compatibility
+        user_email = None
+        try:
+            user_doc = mongo["users"].find_one({"_id": ObjectId(user_id)})
+            if user_doc:
+                user_email = user_doc.get("email")
+        except Exception:
+            pass
+
+        # Filter by user_id (ObjectId) OR user email (for backward compat)
+        user_match = [{"user_id": user_id}]
+        if user_email:
+            user_match.append({"user_id": user_email})
+
         pipeline = [
-            {"$match": {"user_id": user_id}},
+            {"$match": {"$or": user_match}},
             {"$group": {
                 "_id": "$status",
                 "count": {"$sum": 1}
@@ -548,12 +597,18 @@ def publish_post(post_id):
         users_collection = mongo["users"]
 
         # 1) Find the post
-        post_doc, actual_id = _find_post(posts_collection, post_id, user_id)
+        post_doc, actual_id = _find_post(posts_collection, post_id, user_id, current_app._get_current_object())
         if not post_doc:
             return jsonify({"success": False, "error": "Post not found"}), 404
 
         # 2) Get user with LinkedIn token
-        user = users_collection.find_one({"email": user_id})
+        user = None
+        try:
+            user = users_collection.find_one({"_id": ObjectId(user_id)})
+        except Exception:
+            pass
+        if not user:
+            user = users_collection.find_one({"email": user_id})
         if not user:
             return jsonify({"success": False, "error": "User not found"}), 404
 
@@ -665,7 +720,13 @@ def refresh_all_engagement():
         posts_collection = mongo[Post.collection_name]
         users_collection = mongo["users"]
 
-        user = users_collection.find_one({"email": user_id})
+        user = None
+        try:
+            user = users_collection.find_one({"_id": ObjectId(user_id)})
+        except Exception:
+            pass
+        if not user:
+            user = users_collection.find_one({"email": user_id})
         if not user:
             return jsonify({"success": False, "error": "User not found"}), 404
 

@@ -100,14 +100,23 @@ def _check_scheduled_posts(app):
                     continue
 
                 post_id = post["_id"]
-                user_email = post.get("user_id")
+                user_id = post.get("user_id")
                 platforms = post.get("platforms", {})
 
-                # Get user
-                user = users_collection.find_one({"email": user_email})
+                # Get user by primary user id, then fallback to email for older data
+                user = None
+                try:
+                    user = users_collection.find_one({"_id": ObjectId(user_id)})
+                except Exception:
+                    pass
                 if not user:
-                    print(f"[SCHEDULER] User {user_email} not found, skipping post {post_id}")
+                    user = users_collection.find_one({"email": user_id})
+                if not user:
+                    print(f"[SCHEDULER] User {user_id} not found, skipping post {post_id}")
                     continue
+
+                # Get user email for lookups
+                user_email = user.get("email")
 
                 # If no schedule_time, use optimal posting times from settings
                 if not post_time or post_time == "00:00":

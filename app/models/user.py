@@ -9,7 +9,8 @@ class User:
     
     def __init__(self, email, password=None, linkedin_id=None, first_name=None, 
                  last_name=None, profile_picture=None, locale=None, 
-                 linkedin_data=None, oauth_provider=None, role="FREE", _id=None):
+                 linkedin_data=None, oauth_provider=None, social_accounts=None,
+                 role="FREE", _id=None):
         self._id = _id
         self.email = email
         self.password = password
@@ -20,6 +21,7 @@ class User:
         self.locale = locale
         self.linkedin_data = linkedin_data
         self.oauth_provider = oauth_provider
+        self.social_accounts = social_accounts or []
         self.role = role
         self.created_at = datetime.utcnow()
         self.updated_at = datetime.utcnow()
@@ -36,6 +38,7 @@ class User:
             "locale": self.locale,
             "linkedin_data": self.linkedin_data,
             "oauth_provider": self.oauth_provider,
+            "social_accounts": self.social_accounts,
             "role": self.role,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
@@ -57,6 +60,7 @@ class User:
             locale=data.get("locale"),
             linkedin_data=data.get("linkedin_data"),
             oauth_provider=data.get("oauth_provider"),
+            social_accounts=data.get("social_accounts", []),
             role=data.get("role", "FREE"),
             _id=data.get("_id")
         )

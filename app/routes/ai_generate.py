@@ -18,15 +18,28 @@ def detect_language(text):
     if arabic_count > len(text) * 0.1:
         return "Arabic"
 
-    # Check for French indicators
+    # Check for French indicators - VERY AGGRESSIVE DETECTION
     french_chars = sum(1 for c in text if c in 'àâäéèêëïîôùûüçœæÀÂÄÉÈÊËÏÎÔÙÛÜÇŒÆ')
     french_words = ['les', 'des', 'une', 'est', 'dans', 'pour', 'sur', 'avec', 'qui', 'que',
                     'pas', 'sont', 'mais', 'aussi', 'cette', 'tout', 'fait', 'comme', 'nous',
                     'leur', 'entre', 'très', 'être', 'avoir', 'faire', 'peut', 'plus', 'bien',
-                    'comment', 'pourquoi', 'quand', 'où', 'donc', 'alors', 'parce']
+                    'comment', 'pourquoi', 'quand', 'où', 'donc', 'alors', 'parce', 'je', 'tu',
+                    'il', 'elle', 'on', 'vous', 'ils', 'elles', 'mon', 'ton', 'son', 'ma', 'ta',
+                    'sa', 'mes', 'tes', 'ses', 'notre', 'votre', 'leur', 'nos', 'vos', 'leurs',
+                    'le', 'la', 'un', 'du', 'au', 'aux', 'de', 'en', 'par', 'sans', 'avec',
+                    'pour', 'sur', 'sous', 'vers', 'chez', 'dans', 'y', 'en', 'ne', 'ni', 'or',
+                    'car', 'si', 'comme', 'lorsque', 'puisque', 'quoique', 'bien', 'mal',
+                    'peu', 'beaucoup', 'trop', 'assez', 'tel', 'telle', 'tels', 'telles',
+                    'cet', 'cette', 'ces', 'ce', 'ces', 'aucun', 'aucune', 'aucuns', 'aucunes',
+                    'chaque', 'plusieurs', 'certains', 'certaines', 'tout', 'tous', 'toute',
+                    'toutes', 'rien', 'quelque', 'quelques', 'quelqu\'un', 'personne',
+                    'intelligence', 'artificielle', 'données', 'numérique', 'technologie',
+                    'développement', 'création', 'monde', 'nouveau', 'nouvelle', 'importante',
+                    'changement', 'changer', 'futur', 'avenir', 'solution', 'problème']
     words = re.findall(r'\b\w+\b', text.lower())
     french_word_count = sum(1 for w in words if w in french_words)
-    if french_chars > 0 or (len(words) > 3 and french_word_count >= 2):
+    # FORCE FRENCH DETECTION: Any French char OR any French word (10% threshold) OR 1+ French word in any text
+    if french_chars > 0 or (len(words) > 0 and french_word_count >= 1) or (len(words) > 0 and french_word_count / len(words) > 0.1):
         return "French"
 
     # Check for Spanish
@@ -76,7 +89,7 @@ def generate():
             detected_lang = lang_map[explicit_lang]
         else:
             detected_lang = detect_language(user_content) if user_content else detect_language(prompt)
-        current_app.logger.info(f"Language: {detected_lang} (explicit={explicit_lang}, from: {(user_content or prompt)[:80]}...)")
+        current_app.logger.info(f"Language: {detected_lang} (explicit={explicit_lang}, user_content='{user_content[:50]}...', prompt='{prompt[:50]}...')")
 
         # Build messages — enforce detected language
         messages = []

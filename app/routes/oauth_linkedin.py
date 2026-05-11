@@ -1,9 +1,10 @@
-from flask import Blueprint, current_app, redirect, request, jsonify, g
+from flask import Blueprint, current_app, redirect, request, jsonify, g, session
 import requests
-from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
+from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity, decode_token
 from urllib.parse import urlencode, quote
 from app.models.user import User
 from datetime import datetime, timedelta
+from bson.objectid import ObjectId
 
 oauth_linkedin_bp = Blueprint(
     "oauth_linkedin_bp",
@@ -29,6 +30,20 @@ def start():
         # ✅ décommente si tu veux forcer l'écran login à chaque fois
         # "prompt": "login",
     }
+
+    # Handle account linking
+    link_token = request.args.get("link_token")
+    link_user_id = None
+    if link_token:
+        try:
+            decoded = decode_token(link_token)
+            link_identity = decoded.get("sub") or decoded.get("identity")
+            if link_identity:
+                link_user_id = link_identity
+                session["oauth_linking_user_id"] = link_user_id
+                print(f"Linking OAuth to user: {link_user_id}")
+        except Exception as e:
+            print("Invalid LinkedIn link_token:", str(e))
 
     auth_url = "https://www.linkedin.com/oauth/v2/authorization?" + urlencode(params)
     return redirect(auth_url)
@@ -107,31 +122,70 @@ def callback():
     # 5) Save or update user in MongoDB
     try:
         collection = current_app.mongo["users"]
-        
-        # Check if user exists
-        existing_user = collection.find_one({"email": email})
-        
-        if existing_user:
-            # Update existing user
-            update_data = {
-                "linkedin_id": userinfo.get("sub"),
-                "first_name": userinfo.get("given_name"),
-                "last_name": userinfo.get("family_name"),
-                "profile_picture": userinfo.get("picture"),
-                "locale": userinfo.get("locale"),
-                "linkedin_data": userinfo,
-                "oauth_provider": "linkedin",
-                "linkedin_access_token": access_token_li,
-                "linkedin_token_expires_at": datetime.utcnow() + timedelta(seconds=expires_in),
-                "updated_at": datetime.utcnow()
+        link_user_id = session.pop("oauth_linking_user_id", None)
+        link_user_doc = None
+
+        if link_user_id:
+            try:
+                link_user_doc = collection.find_one({"_id": ObjectId(link_user_id)})
+            except Exception as e:
+                print("Invalid LinkedIn link user id:", str(e))
+
+        provider_owner = collection.find_one({
+            "social_accounts": {
+                "$elemMatch": {
+                    "provider": "linkedin",
+                    "provider_user_id": userinfo.get("sub")
+                }
             }
-            result = collection.update_one(
-                {"email": email},
-                {"$set": update_data}
-            )
+        })
+        if provider_owner:
+            existing_user = provider_owner
+        elif link_user_doc:
+            existing_user = link_user_doc
+        else:
+            existing_user = collection.find_one({"email": email})
+
+        account_data = {
+            "provider": "linkedin",
+            "provider_user_id": userinfo.get("sub"),
+            "first_name": userinfo.get("given_name"),
+            "last_name": userinfo.get("family_name"),
+            "profile_picture": userinfo.get("picture"),
+            "locale": userinfo.get("locale"),
+            "profile": userinfo,
+            "access_token": access_token_li,
+            "token_expires_at": datetime.utcnow() + timedelta(seconds=expires_in),
+            "updated_at": datetime.utcnow()
+        }
+
+        if existing_user:
+            if not existing_user.get("oauth_provider"):
+                account_data["oauth_provider"] = "linkedin"
+
+            # Update existing LinkedIn account or append if missing
+            existing_accounts = existing_user.get("social_accounts", [])
+            linkedin_account = next((a for a in existing_accounts if a.get("provider") == "linkedin"), None)
+            if linkedin_account:
+                collection.update_one(
+                    {"_id": existing_user["_id"], "social_accounts.provider": "linkedin"},
+                    {"$set": {"social_accounts.$": account_data, "updated_at": datetime.utcnow()}}
+                )
+            else:
+                collection.update_one(
+                    {"_id": existing_user["_id"]},
+                    {"$push": {"social_accounts": account_data}, "$set": {"updated_at": datetime.utcnow()}}
+                )
+
+            # Keep a top-level linkedin_id for compatibility when only one LinkedIn account exists
+            if not existing_user.get("linkedin_id"):
+                collection.update_one(
+                    {"_id": existing_user["_id"]},
+                    {"$set": {"linkedin_id": userinfo.get("sub"), "oauth_provider": existing_user.get("oauth_provider", "linkedin"), "updated_at": datetime.utcnow()}}
+                )
+            user_id = str(existing_user["_id"])
             print(f"User updated in MongoDB: {email}")
         else:
-            # Create new user
             new_user = {
                 "email": email,
                 "password": None,
@@ -141,24 +195,29 @@ def callback():
                 "profile_picture": userinfo.get("picture"),
                 "locale": userinfo.get("locale"),
                 "linkedin_data": userinfo,
-                "oauth_provider": "linkedin",
                 "linkedin_access_token": access_token_li,
                 "linkedin_token_expires_at": datetime.utcnow() + timedelta(seconds=expires_in),
+                "oauth_provider": "linkedin",
+                "social_accounts": [account_data],
                 "role": "FREE",
                 "created_at": datetime.utcnow(),
                 "updated_at": datetime.utcnow()
             }
             result = collection.insert_one(new_user)
+            user_id = str(result.inserted_id)
             print(f"New user created in MongoDB: {email} (ID: {result.inserted_id})")
     except Exception as e:
         print(f"Error saving user to MongoDB: {str(e)}")
         return redirect(f"{frontend_url}/login?oauth_error=db_error")
 
     # 6) créer JWT puis rediriger vers React (✅ HASH)
-    jwt_token = create_access_token(identity=email, expires_delta=timedelta(days=7))
+    jwt_token = create_access_token(identity=user_id, expires_delta=timedelta(days=7))
     token_encoded = quote(jwt_token)
 
-    redirect_to = f"{frontend_url}/oauth/callback#token={token_encoded}"
+    full_name = f"{userinfo.get('given_name','') or userinfo.get('localizedFirstName','')} {userinfo.get('family_name','') or userinfo.get('localizedLastName','') or ''}".strip()
+    profile_picture = userinfo.get('picture') or ""
+    user_info_encoded = quote(f"{full_name}||{full_name}||{profile_picture}")
+    redirect_to = f"{frontend_url}/oauth/callback#token={token_encoded}&provider=linkedin&user={user_info_encoded}"
     print("Redirecting to:", redirect_to)
 
     return redirect(redirect_to)
@@ -172,13 +231,20 @@ def get_current_user():
     Requires valid JWT token in Authorization header.
     """
     try:
-        # Get email from JWT identity or global user_email
-        email = getattr(g, 'user_email', None) or get_jwt_identity()
-        
-        # Query MongoDB for user
+        # Get user id from JWT identity or global user_email
+        identity = get_jwt_identity()
         collection = current_app.mongo["users"]
-        user_doc = collection.find_one({"email": email})
-        
+        user_doc = None
+
+        try:
+            user_doc = collection.find_one({"_id": ObjectId(identity)})
+        except Exception:
+            pass
+
+        if not user_doc:
+            email = getattr(g, 'user_email', None) or identity
+            user_doc = collection.find_one({"email": email})
+
         if not user_doc:
             return jsonify(message="User not found"), 404
         

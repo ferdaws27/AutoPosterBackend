@@ -15,6 +15,10 @@ class Config:
 
     # Session
     SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-key-change-in-production")
+    SESSION_COOKIE_HTTPONLY = True
+    SESSION_COOKIE_SAMESITE = "Lax"
+    PERMANENT_SESSION_LIFETIME = 86400  # 24 hours
+    SESSION_COOKIE_SECURE = False  # Dev: False, Prod: True with HTTPS
 
     # MongoDB
     MONGO_URI = os.getenv("MONGO_URI")
