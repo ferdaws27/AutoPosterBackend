@@ -64,26 +64,46 @@ def fetch_trends_from_api():
         # Incrémenter le compteur de requêtes
         api_request_count['count'] += 1
         print(f"Requête API #{api_request_count['count']}/{api_request_count['daily_limit']} du jour")
+        print(f"API Response Status: {response.status_code}")
         
         # Check if request was successful
         if response.status_code != 200:
-            error_data = response.json() if response.headers.get('content-type', '').startswith('application/json') else {}
-            return None, f'API request failed with status {response.status_code}: {error_data.get("message", "Unknown error")}'
+            error_data = {}
+            try:
+                error_data = response.json()
+            except:
+                error_data = {'error': response.text}
+            print(f"API Error: {error_data}")
+            return None, f'API request failed with status {response.status_code}: {error_data.get("message", str(error_data))}'
         
         # Parse and return response
         response_data = response.json()
+        print(f"API Response: {response_data}")
         
         # Extract trends from TwitterAPI.io response structure
         trends = []
         if response_data.get('status') == 'success' and 'trends' in response_data:
             trends = response_data['trends']
+        elif isinstance(response_data, list):
+            # Handle if response is directly a list of trends
+            trends = response_data
+        elif 'data' in response_data:
+            # Handle alternate response format
+            trends = response_data['data']
+        else:
+            # If trends found anywhere in response
+            trends = response_data.get('trends', [])
         
         return trends, None
         
     except requests.exceptions.RequestException as e:
+        print(f"Request Exception: {str(e)}")
         return None, f'Failed to connect to Twitter Trends API: {str(e)}'
         
     except Exception as e:
+        print(f"Exception: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return None, f'An unexpected error occurred: {str(e)}'
 
 @trends_bp.route('/api/trends/twitter', methods=['GET'])
@@ -118,6 +138,7 @@ def get_twitter_trends():
         fresh_trends, error = fetch_trends_from_api()
         
         if error:
+            print(f"API Error occurred: {error}")
             # Si erreur et cache existe, utiliser le cache même expiré
             if trends_cache['data'] is not None:
                 print(f"API failed, using expired cache: {error}")
@@ -126,18 +147,21 @@ def get_twitter_trends():
                     'data': trends_cache['data'],
                     'cached': True,
                     'cache_expired': True,
-                    'cache_expires_at': trends_cache['expires_at'].isoformat(),
+                    'cache_expires_at': trends_cache['expires_at'].isoformat() if trends_cache['expires_at'] else None,
                     'message': f'Using cached data (API unavailable: {error})'
                 })
             else:
-                # Pas de cache disponible
+                # Pas de cache disponible - return mock data or error
+                print("No cache available, returning error")
                 return jsonify({
+                    'success': False,
                     'error': 'Failed to fetch trends',
-                    'message': error
-                }), 500
+                    'message': error,
+                    'data': []  # Return empty array as fallback
+                }), 200  # Return 200 instead of 500 to avoid breaking UI
         
         # Mettre à jour le cache avec les nouvelles données
-        trends_cache['data'] = fresh_trends
+        trends_cache['data'] = fresh_trends if fresh_trends else []
         trends_cache['timestamp'] = current_time
         trends_cache['expires_at'] = current_time + timedelta(hours=24)  # 24 heures
         
@@ -145,7 +169,7 @@ def get_twitter_trends():
         
         return jsonify({
             'success': True,
-            'data': fresh_trends,
+            'data': fresh_trends if fresh_trends else [],
             'cached': False,
             'cache_expires_at': trends_cache['expires_at'].isoformat(),
             'message': 'Twitter trends retrieved successfully',
@@ -156,10 +180,15 @@ def get_twitter_trends():
         })
         
     except Exception as e:
+        print(f"Exception in get_twitter_trends: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify({
+            'success': False,
             'error': 'Internal server error',
-            'message': f'An unexpected error occurred: {str(e)}'
-        }), 500
+            'message': f'An unexpected error occurred: {str(e)}',
+            'data': []
+        }), 200  # Return 200 instead of 500
 
 @trends_bp.route('/api/trends/test', methods=['GET'])
 def test_trends_connection():
