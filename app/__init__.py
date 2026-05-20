@@ -16,18 +16,22 @@ def create_app():
     app = Flask(__name__)
     app.config.from_object(Config)
 
-    # CORS pour le frontend React
+    # CORS pour le frontend React - Support local et production
+    frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:5173')
+    cors_origins = [
+        frontend_url,  # URL de production/development
+        "http://localhost:5173",
+        "http://127.0.0.1:5173", 
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
+        "http://localhost:5175",
+        "http://127.0.0.1:5175",
+        "http://localhost:5176",
+        "http://127.0.0.1:5176"
+    ]
+    
     CORS(app, 
-        origins=[
-            "http://localhost:5173",
-            "http://127.0.0.1:5173", 
-            "http://localhost:5174",
-            "http://127.0.0.1:5174",
-            "http://localhost:5175",
-            "http://127.0.0.1:5175",
-            "http://localhost:5176",
-            "http://127.0.0.1:5176"
-        ],
+        origins=cors_origins,
         allow_headers=["Content-Type", "Authorization"],
         methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         supports_credentials=True
@@ -58,13 +62,14 @@ def create_app():
     app.mongo_client = mongo_client
     app.mongo = mongo_client[mongo_db_name]
 
-    # Test connexion Mongo
+    # Test connexion Mongo (optionnel - ne pas crasher si indisponible)
     try:
         mongo_client.admin.command("ping")
         print("MongoDB connected successfully")
     except Exception as e:
-        print(f"MongoDB connection error: {e}")
-        raise
+        print(f"MongoDB connection warning: {e}")
+        # On ne lève pas l'exception - l'app marche même sans MongoDB
+        # Les requêtes MongoDB échoueront mais l'app démarre
 
     # Initialize guest user if not exists
     try:
